@@ -1,45 +1,49 @@
 # -*- coding: utf-8 -*-
 
-from collections import defaultdict
-from matplotlib import pyplot
-from functools import total_ordering, partial
-from datetime import date
 from typing import List, Tuple, Set, Generator, DefaultDict
 from typing import NoReturn, Optional, Union
-from pandas import DataFrame, Series, read_csv, concat
-from numpy import array, ndarray, dot, linspace, append
-from scipy import optimize, interpolate
-from enum import Enum
-from math import log
 
-WEIGHTS = read_csv('data.csv')
+import collections
+import matplotlib
+import functools
+import datetime
+import pandas
+import numpy
+import scipy
+import enum
+import math
+
+WEIGHTS = pandas.read_csv('data.csv')
 print("Finished loading dependencies")
 
 
-class DefaultStrength(Enum):
+class DefaultStrength(enum.Enum):
     WEAK = 0
     AVERAGE = 1
     STRONG = 2
 
 
-# Class for the participants of the pubquiz
-@total_ordering
+# Class for the participants of the pub-quiz
+@functools.total_ordering
 class Player:
-    def __init__(self, name: str, strength: DefaultStrength) -> NoReturn:
+
+    # Initialize the player with a name and a strength
+    def __init__(self, player_name: str, strength: DefaultStrength) -> None:
         global WEIGHTS
 
-        self.name = name
+        self.name = player_name
         self.strength = strength
 
-        db_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
-        if db_row.empty:
-            db_row = DataFrame([[self.name, 0.1]], columns=['name', 'weight'])
-            WEIGHTS = concat([WEIGHTS, db_row], axis=0, ignore_index=True)
-            db_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
+        player_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
+        if player_row.empty:
+            data = [[self.name, self.strength.value * 0.1]]
+            player_row = pandas.DataFrame(data, columns=['name', 'weight'])
+            WEIGHTS = WEIGHTS.append(player_row, ignore_index=True)
+            player_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
 
-        self.index = db_row.index
-        self.weight = db_row.loc[self.index, 'weight'].item()
         self.games = set()
+        self.index = player_row.index.item()
+        self.weight = player_row['weight'].item()
 
     def __hash__(self) -> int:
         return hash((self.name, self.weight))
@@ -127,10 +131,10 @@ class Game:
 
     def __init__(
             self,
-            game_date: Optional[date],
+            game_date: Optional[datetime.date],
             game_score: Optional[int],
             *players: Player
-    ) -> NoReturn:
+    ) -> None:
 
         self.date = game_date
         self.score = game_score
@@ -183,25 +187,25 @@ class Game:
 
     def predict_score(self) -> int:
         individual = sum(player.get_score() for player in self.players)
-        overlap = 1 - Game.WEIGHT * log(self.player_count())
+        overlap = 1 - Game.WEIGHT * math.log(self.player_count())
 
         return round(individual * overlap)
 
-    def calculate_score(self, weight: ndarray) -> ndarray:
-        participations = array([
+    def calculate_score(self, weight: numpy.ndarray) -> numpy.ndarray:
+        participations = numpy.array([
             int(i in self.get_player_indices()) for i in range(len(weight) - 1)
         ] + [0])
-        overlap = 1 - weight[-1] * log(self.player_count())
+        overlap = 1 - weight[-1] * math.log(self.player_count())
 
-        return dot(participations, weight) * overlap * Game.MAX_POINTS
+        return numpy.dot(participations, weight) * overlap * Game.MAX_POINTS
 
 
 # Class for the complete history of all quizzes
 class History:
 
-    def __init__(self, *games: Game) -> NoReturn:
+    def __init__(self, *games: Game) -> None:
         self.games: Tuple[Game] = games
-        self.ucrts: DefaultDict[Player, List[List[Player]]] = defaultdict(list)
+        self.ucrts: DefaultDict[Player, List[List[Player]]] = collections.defaultdict(list)
 
         for player in self.get_all_players():
             o = [
@@ -278,12 +282,12 @@ class History:
 
     def _objective_function(
 
-            self, w: Optional[Union[ndarray, float]], reset=False) -> float:
+            self, w: Optional[Union[numpy.ndarray, float]], reset=False) -> float:
         print('test')
         if reset:
             players = sorted(self.get_all_players(), key=lambda p: p.index)
-            strengths = array([player.strength.value for player in players])
-            w = append(strengths * w, [Game.WEIGHT])
+            strengths = numpy.array([player.strength.value for player in players])
+            w = numpy.append(strengths * w, [Game.WEIGHT])
 
         if w is None:
             return sum(
@@ -335,7 +339,7 @@ class History:
             WEIGHTS.loc[p.index, 'weight'] = p.weight - by
         WEIGHTS.to_csv(file_name, index=False)
 
-    def recalculate_weights(self, r: bool = False) -> optimize.OptimizeResult:
+    def recalculate_weights(self, r: bool = False) -> scipy.optimize.OptimizeResult:
         global WEIGHTS
 
         WEIGHTS = WEIGHTS.sort_values('name', ignore_index=True)
@@ -346,21 +350,21 @@ class History:
         weights = WEIGHTS.loc[:, 'weight'].to_numpy()
 
         if r:
-            objective_function = partial(self._objective_function, reset=True)
-            result = optimize.minimize_scalar(objective_function)
+            objective_function = functools.partial(self._objective_function, reset=True)
+            result = scipy.optimize.minimize_scalar(objective_function)
             players = sorted(self.get_all_players(), key=lambda p: p.index)
-            arr = array([player.strength.value for player in players])
-            WEIGHTS['weight'] = Series(append(arr * result.x, [Game.WEIGHT]))
+            arr = numpy.array([player.strength.value for player in players])
+            WEIGHTS['weight'] = pandas.Series(numpy.append(arr * result.x, [Game.WEIGHT]))
 
         else:
-            result = optimize.minimize(
+            result = scipy.optimize.minimize(
                 self._objective_function, weights,
                 method='Nelder-Mead',
                 options={'xatol': 1e-8, 'disp': False},
-                bounds=optimize.Bounds(0)
+                bounds=scipy.optimize.Bounds(0)
             )
 
-            WEIGHTS['weight'] = Series(result.x)
+            WEIGHTS['weight'] = pandas.Series(result.x)
 
         WEIGHTS.to_csv('data.csv', index=False)
         for player in self.get_all_players():
@@ -374,22 +378,22 @@ class History:
 
     def plot_history(self) -> NoReturn:
         x, y = list(range(len(self.games))), [i.score for i in self.games]
-        pyplot.plot(x, y)
+        matplotlib.pyplot.plot(x, y)
 
-        spline = interpolate.make_interp_spline(x, y)
+        spline = scipy.interpolate.make_interp_spline(x, y)
 
-        X_ = linspace(0, len(self.games) - 1, 500)
+        X_ = numpy.linspace(0, len(self.games) - 1, 500)
         Y_ = spline(X_)
-        pyplot.plot(X_, Y_)
+        matplotlib.pyplot.plot(X_, Y_)
 
-        ius = interpolate.Rbf(x, y)
+        ius = scipy.interpolate.Rbf(x, y)
         Y_ = ius(X_)
-        pyplot.plot(X_, Y_)
+        matplotlib.pyplot.plot(X_, Y_)
 
 
 
         #pyplot.gcf().autofmt_xdate()
-        pyplot.show()
+        matplotlib.pyplot.show()
 
     def get_uncertainties(self, player: Player) -> NoReturn:
         flat = [(p, a) for p, l in self.ucrts.items() for a in l if player in a]
@@ -492,37 +496,37 @@ vinicius = Player("Vinicius", DefaultStrength.STRONG)
 print('off to a good start 2')
 
 history = History(
-    Game(date(2022, 7 , 18), 23, mantas, paul, linda, agne),
-    Game(date(2022, 7 , 25), 42, mantas, paul, nicolo, simon_moe, fabian_moe, richard_alt),
-    Game(date(2022, 8 , 1 ), 34, mantas, luis, linda, roman, felix),
-    Game(date(2022, 8 , 8 ), 29, mantas, luis, nicolo, vinicius, laurin),
-    Game(date(2022, 8 , 15), 38, mantas, luis, juergen, johannes, julian_muc),
-    Game(date(2022, 8 , 22), 40, mantas, benedikt, nicolo, philip, julian_moe),
-    Game(date(2022, 8 , 29), 42, mantas, luis, nicolo, philip, patrick, joseph),
-    Game(date(2022, 9 , 5 ), 38, mantas, luis, nicolo, linda, patrick, milena),
-    Game(date(2022, 9 , 12), 44, mantas, paul, nicolo, linda, vinicius, milena, jana),
-    Game(date(2022, 9 , 19), 31, mantas, simon_g, juergen, linda, milena),
-    Game(date(2022, 9 , 26), 38, mantas, simon_g, luis, nicolo, laurin, simon_moe),
-    Game(date(2022, 10, 3 ), 40, mantas, simon_g, milena, leo, riccardo, patrick, joseph, paul),
-    Game(date(2022, 10, 10), 31, mantas, simon_moe, milena, joseph, paul, luis),
-    Game(date(2022, 10, 17), 48, mantas, paul, nicolo, simon_moe),
-    Game(date(2022, 10, 24), 41, mantas, paul, riccardo, linda, vinicius, richard_neu, adrian),
-    Game(date(2022, 10, 31), 43, mantas, paul, adrian, ella, stephan, sebastian_moe, charles, simon_g),
-    Game(date(2022, 11, 7 ), 36, mantas, luis, andi, anni, vinicius, nicolo),
-    Game(date(2022, 11, 14), 36, mantas, laurin, milena, nicolo, patrick, thomas),
-    Game(date(2022, 11, 21), 37, mantas, nicolo, vinicius, paul, georg, simon_g),
-    Game(date(2022, 11, 28), 40, mantas, nicolo, paul, linda, luis, sebastian_neu),
-    Game(date(2022, 12,  5), 36, mantas, nicolo, paul, linda, patrick),
-    Game(date(2022, 12, 12), 34, mantas, paul, linda, patrick, adrian, juergen),
-    Game(date(2022, 12, 19), 46, mantas, nicolo, paul, luis, thomas, riccardo, simon_moe, julian_moe, mutlu),
-    Game(date(2023, 1 ,  2), 33, mantas, johannes, adrian, felix, hendrik, fabian_muc, leander),
-    Game(date(2023, 1 ,  9), 46, mantas, nicolo, paul, luis, linda, vinicius, simon_g, simon_moe),
-    Game(date(2023, 1 , 16), 40, mantas, nicolo, paul, milena, patrick),
-    Game(date(2023, 1 , 23), 45, mantas, nicolo, paul, philip, adolfo, victor, riccardo),
-    Game(date(2023, 1 , 30), 42, mantas, paul, adrian, riccardo, daniela, valeria),
-    Game(date(2023, 2 ,  6), 50, mantas, thomas, luis, paul, patrick, philip, daniela),
-    Game(date(2023, 2 , 13), 33, mantas, valeria, riccardo, adrian, simon_moe, laurin),
-    Game(date(2023, 2 , 20), 28, patrick, nicolo, luis, milena),
+    Game(datetime.date(2022, 7 , 18), 23, mantas, paul, linda, agne),
+    Game(datetime.date(2022, 7 , 25), 42, mantas, paul, nicolo, simon_moe, fabian_moe, richard_alt),
+    Game(datetime.date(2022, 8 , 1 ), 34, mantas, luis, linda, roman, felix),
+    Game(datetime.date(2022, 8 , 8 ), 29, mantas, luis, nicolo, vinicius, laurin),
+    Game(datetime.date(2022, 8 , 15), 38, mantas, luis, juergen, johannes, julian_muc),
+    Game(datetime.date(2022, 8 , 22), 40, mantas, benedikt, nicolo, philip, julian_moe),
+    Game(datetime.date(2022, 8 , 29), 42, mantas, luis, nicolo, philip, patrick, joseph),
+    Game(datetime.date(2022, 9 , 5 ), 38, mantas, luis, nicolo, linda, patrick, milena),
+    Game(datetime.date(2022, 9 , 12), 44, mantas, paul, nicolo, linda, vinicius, milena, jana),
+    Game(datetime.date(2022, 9 , 19), 31, mantas, simon_g, juergen, linda, milena),
+    Game(datetime.date(2022, 9 , 26), 38, mantas, simon_g, luis, nicolo, laurin, simon_moe),
+    Game(datetime.date(2022, 10, 3 ), 40, mantas, simon_g, milena, leo, riccardo, patrick, joseph, paul),
+    Game(datetime.date(2022, 10, 10), 31, mantas, simon_moe, milena, joseph, paul, luis),
+    Game(datetime.date(2022, 10, 17), 48, mantas, paul, nicolo, simon_moe),
+    Game(datetime.date(2022, 10, 24), 41, mantas, paul, riccardo, linda, vinicius, richard_neu, adrian),
+    Game(datetime.date(2022, 10, 31), 43, mantas, paul, adrian, ella, stephan, sebastian_moe, charles, simon_g),
+    Game(datetime.date(2022, 11, 7 ), 36, mantas, luis, andi, anni, vinicius, nicolo),
+    Game(datetime.date(2022, 11, 14), 36, mantas, laurin, milena, nicolo, patrick, thomas),
+    Game(datetime.date(2022, 11, 21), 37, mantas, nicolo, vinicius, paul, georg, simon_g),
+    Game(datetime.date(2022, 11, 28), 40, mantas, nicolo, paul, linda, luis, sebastian_neu),
+    Game(datetime.date(2022, 12,  5), 36, mantas, nicolo, paul, linda, patrick),
+    Game(datetime.date(2022, 12, 12), 34, mantas, paul, linda, patrick, adrian, juergen),
+    Game(datetime.date(2022, 12, 19), 46, mantas, nicolo, paul, luis, thomas, riccardo, simon_moe, julian_moe, mutlu),
+    Game(datetime.date(2023, 1 ,  2), 33, mantas, johannes, adrian, felix, hendrik, fabian_muc, leander),
+    Game(datetime.date(2023, 1 ,  9), 46, mantas, nicolo, paul, luis, linda, vinicius, simon_g, simon_moe),
+    Game(datetime.date(2023, 1 , 16), 40, mantas, nicolo, paul, milena, patrick),
+    Game(datetime.date(2023, 1 , 23), 45, mantas, nicolo, paul, philip, adolfo, victor, riccardo),
+    Game(datetime.date(2023, 1 , 30), 42, mantas, paul, adrian, riccardo, daniela, valeria),
+    Game(datetime.date(2023, 2 ,  6), 50, mantas, thomas, luis, paul, patrick, philip, daniela),
+    Game(datetime.date(2023, 2 , 13), 33, mantas, valeria, riccardo, adrian, simon_moe, laurin),
+    Game(datetime.date(2023, 2 , 20), 28, patrick, nicolo, luis, milena),
 )
 
 if __name__ == "__main__":
