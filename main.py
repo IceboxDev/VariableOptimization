@@ -206,10 +206,10 @@ class History:
         for player in self.get_all_players():
             o = [
                 oth for oth in self.get_all_players().difference({player}) if
-                oth.get_match_history().issubset(player.get_match_history())
+                oth.games.issubset(player.games)
             ]
 
-            for i in History.find_uncertainties(player.get_match_history(), o):
+            for i in History.find_uncertainties(player.games, o):
                 self.ucrts[player].append(i)
 
     @staticmethod
@@ -222,15 +222,15 @@ class History:
         if path is None:
             path = []
 
-        players = [s for s in players if s.get_match_history().issubset(goal)]
-        # players.sort(key=lambda p: len(p.get_match_history()))
-
         while players:
             p = players.pop()
-            if p.get_match_history() == goal:
+            if not p.games.issubset(goal):
+                continue
+
+            if p.games == goal:
                 yield [p]
 
-            n_goal = goal.difference(p.get_match_history())
+            n_goal = goal.difference(p.games)
             for n_path in History.find_uncertainties(n_goal, players, path+[p]):
                 yield n_path + [p]
 
