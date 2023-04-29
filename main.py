@@ -1,26 +1,221 @@
 # -*- coding: utf-8 -*-
 
-from typing import List, Tuple, Set, Generator, DefaultDict
+from oauth2client.service_account import ServiceAccountCredentials
+from sklearn.ensemble import RandomForestRegressor
+from typing import List, Tuple, Set, Dict, Generator, DefaultDict
 from typing import NoReturn, Optional, Union
+
+import artificial_intelligence
+import constants
 
 import collections
 import matplotlib
+import statistics
 import functools
 import datetime
+import gspread
 import pandas
 import numpy
 import scipy
-import enum
 import math
 
-WEIGHTS = pandas.read_csv('data.csv')
-print("Finished loading dependencies")
+
+# Class for the database of pub-quiz
+class Database:
+
+    # Initialize the database with the credentials
+    def __init__(self, credentials_path: str) -> None:
+        credentials = ServiceAccountCredentials \
+            .from_json_keyfile_name(credentials_path)
+
+        self.client = gspread.authorize(credentials)
+        self.sheet = self.client.open(constants.SPREADSHEET_NAME)
+        self.sheet = self.sheet.worksheet(constants.WORKSHEET_NAME)
+
+        response = self.sheet.batch_get([
+            f'{Database.index_to_cell(*constants.CELL_PLAYER_GRID_L)}:'
+            f'{Database.index_to_cell(*constants.CELL_PLAYER_GRID_R)}',
+            Database.index_to_cell(*constants.CELL_GAME_DATES),
+            Database.index_to_cell(*constants.CELL_GAME_DURATIONS),
+            Database.index_to_cell(*constants.CELL_GAME_SCORES),
+            Database.index_to_cell(*constants.CELL_WEIGHTS_NAME),
+            Database.index_to_cell(*constants.CELL_WEIGHTS_WEIGHT),
+        ])
+
+        self.game_list, self.game_dates, self.game_durations, self.game_scores,\
+            self.weight_players, self.weight_weights = [response[0]] + [
+                tuple(x for y in out_lst for x in y) for out_lst in response[1:]
+            ]
+
+        self.overlap = float("nan")
+        self.players = {}
+        self.games = []
+
+        self.generate_players()
+        self.generate_games()
+
+    @staticmethod
+    # Convert the indices of row and column to the corresponding cell
+    def index_to_cell(
+            row: Optional[int],
+            column: Optional[int],
+            row_offset: Optional[int],
+            column_offset: Optional[int],
+    ) -> str:
+
+        if column is not None:
+            div, mod = divmod(column, 26)
+            prefix_letter = chr(div + ord("A") - 1) if div else ""
+            column_cell = prefix_letter + chr(mod + ord("A") - 1)
+
+        else:
+            return f"{row}{row_offset}:{row}"
+
+        if row is None:
+            return f"{column_cell}{column_offset}:{column_cell}"
+
+        else:
+            return f"{column_cell}{row}"
+
+    @property
+    def overlap(self) -> float:
+        return self._overlap
+
+    @overlap.setter
+    def overlap(self, overlap: float) -> None:
+        self._overlap = overlap
+
+    @property
+    def players(self) -> Dict[str, "Player"]:
+        return self._players
+
+    @players.setter
+    def players(self, players: Dict[str, "Player"]) -> None:
+        self._players = players
+
+    @property
+    def games(self) -> List["Game"]:
+        return self._games
+
+    @games.setter
+    def games(self, games: List["Game"]) -> None:
+        self._games = games
+
+    # Generate the players and their weights
+    def generate_players(self) -> None:
+        flat = sorted((set(player for pl in self.game_list for player in pl)))
+        print(flat)
+        flat.remove('N/A')
+
+        for name in flat:
+            if name in self.weight_players:
+                player_index = self.weight_players.index(name)
+                weight = float(self.weight_weights[player_index])
+                self.players[name] = Player(name, weight)
+
+            else:
+                self.players[name] = Player(name, 0.0)
+
+        overlap_index = self.weight_players.index('Overlap')
+        self.overlap = float(self.weight_weights[overlap_index])
+
+    # Generate the games and their scores
+    def generate_games(self) -> None:
+        for g_idx, team in enumerate(self.game_list):
+            date = datetime.datetime.strptime(
+                self.game_dates[g_idx], '%m/%d/%y').date()
+
+            if len(self.game_durations) > g_idx and self.game_durations[g_idx]:
+                start, end = self.game_durations[g_idx].split(' - ')
+                start = datetime.datetime.strptime(start, '%H:%M').time()
+                end = datetime.datetime.strptime(end, '%H:%M').time()
+                duration = datetime.datetime.combine(datetime.date.min, end) - \
+                    datetime.datetime.combine(datetime.date.min, start)
+
+                if duration.days == -1:
+                    duration += datetime.timedelta(days=1)
+
+            else:
+                duration = None
+
+            if len(self.game_scores) <= g_idx:
+                continue
+
+            score = int(self.game_scores[g_idx])
+            players = [self.players[name] for name in team if name != 'N/A']
+            self.games.append(Game(date, duration, score, *players))
+
+    # Save the weights of the players into the database
+    def save_weights(self) -> None:
+        range_name_l = Database.index_to_cell(
+            constants.COLUMN_PADDING,
+            constants.WEIGHTS_NAMES_COLUMN, None, None
+        )
+        range_name_r = Database.index_to_cell(
+            constants.COLUMN_PADDING + len(self.players),
+            constants.WEIGHTS_WEIGHTS_COLUMN, None, None
+        )
+
+        self.sheet.update(
+            f'{range_name_l}:{range_name_r}',
+            [[name, player.weight] for name, player in self.players.items()] +
+            [['Overlap', self.overlap]]
+        )
+
+    # Recalculate the weights of the players
+    def recalculate_weights(self, reset=False) -> scipy.optimize.OptimizeResult:
+        if reset:
+            loss = lambda weights: numpy.sum(numpy.square(numpy.multiply(numpy.sum(self.player_matrix, axis=1) * weights[0], 1 - numpy.log(numpy.sum(self.player_matrix, axis=1)) * weights[1]) - self.result_matrix)) + (weights[1] * constants.GAME_MAX_SCORE)
+            result = scipy.optimize.minimize(
+                loss, numpy.array([0, 0]),
+                method='Nelder-Mead',
+                options={'xatol': 1e-18, 'disp': False},
+                bounds=scipy.optimize.Bounds(0, 1)
+            )
+            for player in self.players.values():
+                player.weight = result.x[0]
+
+            self.overlap = result.x[-1]
+            # self.save_weights()
+            return result
 
 
-class DefaultStrength(enum.Enum):
-    WEAK = 0
-    AVERAGE = 1
-    STRONG = 2
+        else:
+            loss = lambda weights, *args: numpy.sum(numpy.square((numpy.multiply(numpy.dot(
+                self.player_matrix, weights.T
+            ), 1 - numpy.log(numpy.sum(self.player_matrix, axis=1)) * weights[-1]) - self.result_matrix) * 66)) + (weights[-1] * constants.GAME_MAX_SCORE)
+
+            result = scipy.optimize.differential_evolution(
+                loss,
+                [(0, 1)] * (len(self.players) + 1),
+            )
+
+            for idx, player in enumerate(self.players.values()):
+                player.weight = result.x[idx]
+
+            self.overlap = result.x[-1]
+            # self.save_weights()
+            return result
+
+    def random_forest(self) -> None:
+        R = 1000
+        Q = []
+
+        while R > 200:
+            self.regressor = RandomForestRegressor()
+            # X_train, X_test, y_train, y_test = train_test_split(
+            #     self.player_matrix[:,:-1], self.result_matrix, test_size=0.333
+            # )
+
+            # self.bonus_column = numpy.array([numpy.sum(self.player_matrix, axis=1)]).T
+            # self.input = numpy.concatenate((self.player_matrix[:,:-1], self.bonus_column), axis=1)
+            self.input = self.player_matrix[:,:-1]
+            self.regressor.fit(self.input, self.result_matrix)
+            self.prediction = self.regressor.predict(self.input)
+            self.a = (self.result_matrix - self.prediction) * 66
+            R = numpy.sum(numpy.square(self.a))
+            Q.append(R)
+            print(f'{R}\t{statistics.mean(Q)}')
 
 
 # Class for the participants of the pub-quiz
@@ -28,22 +223,10 @@ class DefaultStrength(enum.Enum):
 class Player:
 
     # Initialize the player with a name and a strength
-    def __init__(self, player_name: str, strength: DefaultStrength) -> None:
-        global WEIGHTS
-
+    def __init__(self, player_name: str, player_weight: float) -> None:
         self.name = player_name
-        self.strength = strength
-
-        player_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
-        if player_row.empty:
-            data = [[self.name, self.strength.value * 0.1]]
-            player_row = pandas.DataFrame(data, columns=['name', 'weight'])
-            WEIGHTS = WEIGHTS.append(player_row, ignore_index=True)
-            player_row = WEIGHTS.loc[WEIGHTS['name'] == self.name]
-
+        self.weight = player_weight
         self.games = set()
-        self.index = player_row.index.item()
-        self.weight = player_row['weight'].item()
 
     def __hash__(self) -> int:
         return hash((self.name, self.weight))
@@ -66,22 +249,6 @@ class Player:
         self._name = value
 
     @property
-    def strength(self):
-        return self._strength
-
-    @strength.setter
-    def strength(self, value):
-        self._strength = value
-
-    @property
-    def index(self) -> int:
-        return self._index
-
-    @index.setter
-    def index(self, value: int) -> NoReturn:
-        self._index = value
-
-    @property
     def weight(self) -> float:
         return self._weight
 
@@ -94,24 +261,11 @@ class Player:
         return self._games
 
     @games.setter
-    def games(self, value) -> NoReturn:
+    def games(self, value: Set) -> NoReturn:
         self._games = value
-
-    def rename(self, new_name) -> NoReturn:
-        global WEIGHTS
-
-        WEIGHTS.loc[self.index, 'name'] = new_name
-        self.name = new_name
-
-        WEIGHTS = WEIGHTS.sort_values('name', ignore_index=True)
-        WEIGHTS.to_csv('data.csv', index=False)
-        exit()
 
     def add_game(self, value: 'Game') -> NoReturn:
         self.games.add(value)
-
-    def get_match_history(self) -> Set['Game']:
-        return self.games
 
     def get_score(self) -> float:
         return self.weight * Game.MAX_POINTS
@@ -120,23 +274,21 @@ class Player:
         return len(self.games) == 1
 
     def has_always_as_teammate(self, player: 'Player') -> bool:
-        return all(player in g.players for g in self.games)
+        return all(player in game.players for game in self.games)
 
 
-# Class for one quiz of pubquiz
+# Class for one quiz of pub-quiz
 class Game:
-
-    MAX_POINTS = 66
-    WEIGHT = WEIGHTS.loc[WEIGHTS['name'] == "~WEIGHT_A"]["weight"].item()
-
     def __init__(
             self,
             game_date: Optional[datetime.date],
+            game_duration: Optional[datetime.timedelta],
             game_score: Optional[int],
             *players: Player
     ) -> None:
 
         self.date = game_date
+        self.duration = game_duration
         self.score = game_score
         self.players = players
 
@@ -144,22 +296,30 @@ class Game:
             player.add_game(self)
 
     def __hash__(self) -> int:
-        return hash((self.date, self.score, self.players))
+        return hash((self.date, self.duration, self.score, self.players))
 
     @property
-    def date(self):
+    def date(self) -> datetime.date:
         return self._date
 
     @date.setter
-    def date(self, value: date):
+    def date(self, value: date) -> None:
         self._date = value
+
+    @property
+    def duration(self) -> datetime.timedelta:
+        return self._duration
+
+    @duration.setter
+    def duration(self, value: datetime.timedelta) -> None:
+        self._duration = value
 
     @property
     def score(self) -> int:
         return self._score
 
     @score.setter
-    def score(self, value: int) -> NoReturn:
+    def score(self, value: int) -> None:
         self._score = value
 
     @property
@@ -167,7 +327,7 @@ class Game:
         return self._players
 
     @players.setter
-    def players(self, value: Tuple[Player]) -> NoReturn:
+    def players(self, value: Tuple[Player]) -> None:
         self._players = value
 
     def player_count(self) -> int:
@@ -181,13 +341,9 @@ class Game:
             if other_player != player:
                 yield other_player
 
-    def get_player_indices(self) -> Generator[int, None, None]:
-        for player in self.players:
-            yield player.index
-
-    def predict_score(self) -> int:
+    def predict_score(self, db: Database) -> int:
         individual = sum(player.get_score() for player in self.players)
-        overlap = 1 - Game.WEIGHT * math.log(self.player_count())
+        overlap = 1 - db.overlap * math.log(self.player_count())
 
         return round(individual * overlap)
 
@@ -276,9 +432,6 @@ class History:
             maximum = player.weight
 
         return minimum, maximum
-
-    def get_all_players(self) -> Set[Player]:
-        return set(player for game in self.games for player in game.players)
 
     def _objective_function(
 
@@ -439,109 +592,11 @@ class History:
         print()
 
 
-# Placeholder average player
-# PAP1 = Player("Average Player 1", DefaultStrength.AVERAGE)
-# PAP2 = Player("Average Player 2", DefaultStrength.AVERAGE)
-# PAP3 = Player("Average Player 3", DefaultStrength.AVERAGE)
-# PAP4 = Player("Average Player 4", DefaultStrength.AVERAGE)
-
-print('off to a good start')
-adolfo = Player("Adolfo", DefaultStrength.WEAK)
-print('off to a good start 2')
-adrian = Player("Adrian", DefaultStrength.AVERAGE)
-agne = Player("Agnė", DefaultStrength.AVERAGE)
-andi = Player("Andi", DefaultStrength.WEAK)
-anni = Player("Anni", DefaultStrength.WEAK)
-benedikt = Player("Benedikt", DefaultStrength.AVERAGE)
-charles = Player("Charles", DefaultStrength.AVERAGE)
-daniela = Player("Daniela", DefaultStrength.WEAK)
-ella = Player("Ella", DefaultStrength.WEAK)
-fabian_moe = Player("Fabian (Moe)", DefaultStrength.AVERAGE)
-fabian_muc = Player("Fabian (Muc)", DefaultStrength.WEAK)
-felix = Player("Felix", DefaultStrength.WEAK)
-georg = Player("Georg", DefaultStrength.WEAK)
-hendrik = Player("Hendrik", DefaultStrength.WEAK)
-jana = Player("Jana", DefaultStrength.WEAK)
-johannes = Player("Johannes", DefaultStrength.STRONG)
-joseph = Player("Joseph", DefaultStrength.AVERAGE)
-julian_moe = Player("Julian (Moe)", DefaultStrength.AVERAGE)
-julian_muc = Player("Julian (Muc)", DefaultStrength.WEAK)
-juergen = Player("Jürgen", DefaultStrength.AVERAGE)
-laurin = Player("Laurin", DefaultStrength.AVERAGE)
-leander = Player("Leander", DefaultStrength.AVERAGE)
-leo = Player("Leo", DefaultStrength.WEAK)
-linda = Player("Linda", DefaultStrength.WEAK)
-luis = Player("Luis", DefaultStrength.STRONG)
-mantas = Player("Mantas", DefaultStrength.WEAK)
-milena = Player("Milena", DefaultStrength.AVERAGE)
-mutlu = Player("Mutlu", DefaultStrength.WEAK)
-nicolo = Player("Nicolo", DefaultStrength.STRONG)
-patrick = Player("Patrick", DefaultStrength.AVERAGE)
-paul = Player("Paul", DefaultStrength.STRONG)
-philip = Player("Philip", DefaultStrength.AVERAGE)
-riccardo = Player("Riccardo", DefaultStrength.WEAK)
-richard_alt = Player("Richard (Alt)", DefaultStrength.WEAK)
-richard_neu = Player("Richard (Neu)", DefaultStrength.WEAK)
-roman = Player("Roman", DefaultStrength.AVERAGE)
-sebastian_moe = Player("Sebastian (Moe)", DefaultStrength.STRONG)
-sebastian_neu = Player("Sebastian (Neu)", DefaultStrength.WEAK)
-simon_g = Player('Simon (G)', DefaultStrength.STRONG)
-simon_moe = Player("Simon (Moe)", DefaultStrength.STRONG)
-stephan = Player("Stephan", DefaultStrength.WEAK)
-thomas = Player("Thomas", DefaultStrength.WEAK)
-valeria = Player("Valeria", DefaultStrength.WEAK)
-victor = Player("Victor", DefaultStrength.WEAK)
-vinicius = Player("Vinicius", DefaultStrength.STRONG)
-
-print('off to a good start 2')
-
-history = History(
-    Game(datetime.date(2022, 7 , 18), 23, mantas, paul, linda, agne),
-    Game(datetime.date(2022, 7 , 25), 42, mantas, paul, nicolo, simon_moe, fabian_moe, richard_alt),
-    Game(datetime.date(2022, 8 , 1 ), 34, mantas, luis, linda, roman, felix),
-    Game(datetime.date(2022, 8 , 8 ), 29, mantas, luis, nicolo, vinicius, laurin),
-    Game(datetime.date(2022, 8 , 15), 38, mantas, luis, juergen, johannes, julian_muc),
-    Game(datetime.date(2022, 8 , 22), 40, mantas, benedikt, nicolo, philip, julian_moe),
-    Game(datetime.date(2022, 8 , 29), 42, mantas, luis, nicolo, philip, patrick, joseph),
-    Game(datetime.date(2022, 9 , 5 ), 38, mantas, luis, nicolo, linda, patrick, milena),
-    Game(datetime.date(2022, 9 , 12), 44, mantas, paul, nicolo, linda, vinicius, milena, jana),
-    Game(datetime.date(2022, 9 , 19), 31, mantas, simon_g, juergen, linda, milena),
-    Game(datetime.date(2022, 9 , 26), 38, mantas, simon_g, luis, nicolo, laurin, simon_moe),
-    Game(datetime.date(2022, 10, 3 ), 40, mantas, simon_g, milena, leo, riccardo, patrick, joseph, paul),
-    Game(datetime.date(2022, 10, 10), 31, mantas, simon_moe, milena, joseph, paul, luis),
-    Game(datetime.date(2022, 10, 17), 48, mantas, paul, nicolo, simon_moe),
-    Game(datetime.date(2022, 10, 24), 41, mantas, paul, riccardo, linda, vinicius, richard_neu, adrian),
-    Game(datetime.date(2022, 10, 31), 43, mantas, paul, adrian, ella, stephan, sebastian_moe, charles, simon_g),
-    Game(datetime.date(2022, 11, 7 ), 36, mantas, luis, andi, anni, vinicius, nicolo),
-    Game(datetime.date(2022, 11, 14), 36, mantas, laurin, milena, nicolo, patrick, thomas),
-    Game(datetime.date(2022, 11, 21), 37, mantas, nicolo, vinicius, paul, georg, simon_g),
-    Game(datetime.date(2022, 11, 28), 40, mantas, nicolo, paul, linda, luis, sebastian_neu),
-    Game(datetime.date(2022, 12,  5), 36, mantas, nicolo, paul, linda, patrick),
-    Game(datetime.date(2022, 12, 12), 34, mantas, paul, linda, patrick, adrian, juergen),
-    Game(datetime.date(2022, 12, 19), 46, mantas, nicolo, paul, luis, thomas, riccardo, simon_moe, julian_moe, mutlu),
-    Game(datetime.date(2023, 1 ,  2), 33, mantas, johannes, adrian, felix, hendrik, fabian_muc, leander),
-    Game(datetime.date(2023, 1 ,  9), 46, mantas, nicolo, paul, luis, linda, vinicius, simon_g, simon_moe),
-    Game(datetime.date(2023, 1 , 16), 40, mantas, nicolo, paul, milena, patrick),
-    Game(datetime.date(2023, 1 , 23), 45, mantas, nicolo, paul, philip, adolfo, victor, riccardo),
-    Game(datetime.date(2023, 1 , 30), 42, mantas, paul, adrian, riccardo, daniela, valeria),
-    Game(datetime.date(2023, 2 ,  6), 50, mantas, thomas, luis, paul, patrick, philip, daniela),
-    Game(datetime.date(2023, 2 , 13), 33, mantas, valeria, riccardo, adrian, simon_moe, laurin),
-    Game(datetime.date(2023, 2 , 20), 28, patrick, nicolo, luis, milena),
-)
-
 if __name__ == "__main__":
-    print('hello')
-    print(history._objective_function(None))
-    history.get_scoreboard()
+    database = Database('optimal-timer-234608-a9f776f9605a.json')
+    ai = artificial_intelligence.ArtificialIntelligence(database)
+    ai.train(artificial_intelligence.NeuralNetwork, 12)
 
-    for _game in history.games:
-        print(_game.score, _game.predict_score())
-
-
-    # history.plot_history()
-    # history.recalculate_weights()
-    # strong = [nicolo.index, luis.index, johannes.index, vinicius.index,
-    #           sebastian_moe.index, simon_moe.index, simon_g.index, paul.index]
-
-    # while True:
-    #     print(history.recalculate_weights().fun)
+    # ai.load(artificial_intelligence.NeuralNetwork, 'model.pt')
+    # for game in database.games:
+    #     print(game.score, round(ai.infer(game)), round(ai.infer(game) - game.score))
