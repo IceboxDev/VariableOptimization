@@ -104,7 +104,6 @@ class Database:
     # Generate the players and their weights
     def generate_players(self) -> None:
         flat = sorted((set(player for pl in self.game_list for player in pl)))
-        print(flat)
         flat.remove('N/A')
 
         for name in flat:
@@ -595,7 +594,7 @@ class History:
 if __name__ == "__main__":
     database = Database('optimal-timer-234608-a9f776f9605a.json')
     ai = artificial_intelligence.ArtificialIntelligence(database)
-    ai.train(artificial_intelligence.NeuralNetwork, 12)
+    ai.train(artificial_intelligence.NeuralNetwork, best_of=1000)
 
     # ai.load(artificial_intelligence.NeuralNetwork, 'model.pt')
     # for game in database.games:

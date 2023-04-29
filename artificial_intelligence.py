@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 
 from multiprocessing.pool import ThreadPool
+import matplotlib.pyplot
 
 import constants
 import itertools
 import typing
 import numpy
+import scipy
 import torch
 import copy
 import tqdm
@@ -69,27 +71,87 @@ class ArtificialIntelligence:
         loss = torch.sum(torch.square(diff)).item()
         return algorithm, loss
 
-    def train(self, algorithm_type: type, best_of: int = 100) -> None:
-        algorithm_name = algorithm_type.__name__
+    def train(
+        self, algorithm_class: type,
+        best_of: int = 100,
+        with_multiprocessing: bool = False,
+    ) -> None:
+
+        algorithm_name = algorithm_class.__name__
         if not os.path.exists(algorithm_name):
             os.makedirs(algorithm_name)
 
-        best_loss, best_model = numpy.inf, None
-        with ThreadPool() as pool:
-            results = pool.imap_unordered(
-                self._train, itertools.repeat(algorithm_type, best_of))
+        best_loss, best_model, loss_history = numpy.inf, None, []
+        if with_multiprocessing:
+            with ThreadPool() as pool:
+                results = pool.imap_unordered(
+                    self._train, itertools.repeat(algorithm_class, best_of))
 
+                progress_bar = tqdm.tqdm(
+                    results, desc='Training AI',
+                    total=best_of, postfix={'best': numpy.inf}
+                )
+
+                for algorithm, loss in progress_bar:
+                    loss_history.append(loss)
+                    if loss < best_loss:
+                        best_loss, self.algorithm = loss, algorithm
+                        progress_bar.set_postfix({'best': best_loss})
+
+        else:
             progress_bar = tqdm.tqdm(
-                results, desc='Training AI',
+                range(best_of), desc='Training AI',
                 total=best_of, postfix={'best': numpy.inf}
             )
 
-            for algorithm, loss in progress_bar:
+            for _ in progress_bar:
+                algorithm, loss = self._train(algorithm_class)
+                loss_history.append(loss)
                 if loss < best_loss:
                     best_loss, self.algorithm = loss, algorithm
                     progress_bar.set_postfix({'best': best_loss})
 
-        self.algorithm.save('model.pt')
+        # Probability density function
+        loss_history.sort()
+        mean, std = numpy.mean(loss_history), numpy.std(loss_history)
+        pdf = scipy.stats.norm.pdf(loss_history, mean, std)
+        matplotlib.pyplot.plot(loss_history, pdf)
+
+        # Vertical lines
+        matplotlib.pyplot.axvline(x=best_loss, color='r', linestyle='--')
+        matplotlib.pyplot.axvline(x=mean, color='y', linestyle='-')
+        matplotlib.pyplot.axvline(x=mean + std, color='y', linestyle='--')
+        matplotlib.pyplot.axvline(x=mean - std, color='y', linestyle='--')
+
+        # Text
+        matplotlib.pyplot.text(
+            best_loss, numpy.max(pdf) / 2, f'Best: {best_loss:.0f}',
+            horizontalalignment='right',
+            verticalalignment='center',
+            rotation='vertical'
+        )
+        matplotlib.pyplot.text(
+            mean, numpy.max(pdf) / 2, f'Mean: {mean:.0f}',
+            horizontalalignment='right',
+            verticalalignment='center',
+            rotation='vertical'
+        )
+        matplotlib.pyplot.text(
+            mean + std, numpy.max(pdf) / 2, f'STD: {std:.0f}',
+            horizontalalignment='right',
+            verticalalignment='center',
+            rotation='vertical'
+        )
+
+        # Labeling
+        matplotlib.pyplot.title('Loss Distribution')
+        matplotlib.pyplot.xlabel('Loss')
+        matplotlib.pyplot.ylabel('Probability')
+
+        # Saving
+        name = f'{algorithm_name}/[{best_loss:4.0f}] Loss.png'
+        matplotlib.pyplot.savefig(name)
+        self.algorithm.save(f'[{best_loss:4.0f}] Model.pt')
 
     def load(self, algorithm_type: type, model_file) -> None:
         self.algorithm = algorithm_type(self.train_x.shape[1])
@@ -102,7 +164,8 @@ class ArtificialIntelligence:
             for player in self.database.players.values()
         ], dtype=torch.float32).reshape(1, -1)
 
-        return self.algorithm.infer(game_tensor).item() * constants.GAME_MAX_SCORE
+        prediction = self.algorithm.infer(game_tensor)
+        return prediction.item() * constants.GAME_MAX_SCORE
 
 
 class NeuralNetwork:
