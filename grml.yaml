@@ -1,0 +1,11 @@
+version: 2
+project: VariableOptimization
+
+env:
+    GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-0e9093102d75.json"
+
+commands:
+    start:
+        help: Start the Variable Optimization project
+        exec: |
+            python main.py --config %{GOOGLE_APPLICATION_CREDENTIALS}

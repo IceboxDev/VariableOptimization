@@ -20,16 +20,16 @@ WORKSHEET_NAME: Final[str] = 'Quiz Match History'
 GAME_DATES_COLUMN: Final[int] = 1
 GAME_DURATIONS_COLUMN: Final[int] = 2
 GAME_SCORES_COLUMN: Final[int] = 3
-GAME_PLAYERS_COLUMN: Final[int] = 7
-WEIGHTS_NAMES_COLUMN: Final[int] = 32
-WEIGHTS_WEIGHTS_COLUMN: Final[int] = 33
+GAME_PLAYERS_COLUMN: Final[int] = 8
+WEIGHTS_NAMES_COLUMN: Final[int] = 56
+WEIGHTS_WEIGHTS_COLUMN: Final[int] = 57
 
 PLAYER_PADDING: Final[int] = 2
-COLUMN_PADDING: Final[int] = 4
+COLUMN_PADDING: Final[int] = 3
 
 SPREADSHEET_MAX_ROWS: Final[int] = 1000
 
-GAME_MAX_PLAYERS: Final[int] = 9
+GAME_MAX_PLAYERS: Final[int] = 13
 
 CELL_PLAYER_GRID_L: Final[Index] = (
     PLAYER_PADDING, GAME_PLAYERS_COLUMN, None, None)

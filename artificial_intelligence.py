@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 from multiprocessing.pool import ThreadPool
 import matplotlib.pyplot
 
@@ -10,6 +9,7 @@ import numpy
 import scipy
 import torch
 import copy
+import math
 import tqdm
 import os
 
@@ -23,15 +23,22 @@ class ArtificialIntelligence:
 
         # Player matrix is a 2D matrix of games x players
         player_matrix = numpy.ma.masked_equal([[
-            len(player.games) * int(player in game.players)
-            for player in self.database.players.values()
-        ] for game in self.database.games], 0)
+            sum([g.has_score() for g in pl.games]) * int(pl in game.players)
+            for pl in self.database.players.values()
+        ] for game in self.database.games if game.has_score()], 0)
 
         # Result matrix is a 2D matrix of games x 1
         result_matrix = numpy.array([
             game.score / constants.GAME_MAX_SCORE
-            for game in self.database.games
+            for game in self.database.games if game.has_score()
         ]).T
+
+        # Calculate the recency coefficient for each game
+        last_game_year = self.database.games[-1].date.year
+        self.recenty_matrix = numpy.array([
+            math.exp((game.date.year - last_game_year) * 0.5)
+            for game in self.database.games if game.has_score()
+        ])
 
         # Calculate how many participations qualify you to be in validation set
         minimum_participations = numpy.min(player_matrix, axis=1)
@@ -68,7 +75,7 @@ class ArtificialIntelligence:
 
         prediction = algorithm.infer(self.complete_x)
         diff = (self.complete_y - prediction) * constants.GAME_MAX_SCORE
-        loss = torch.sum(torch.square(diff)).item()
+        loss = torch.sum(torch.square(diff * self.recenty_matrix)).item()
         return algorithm, loss
 
     def train(

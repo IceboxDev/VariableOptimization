@@ -286,9 +286,9 @@ class Game:
             *players: Player
     ) -> None:
 
-        self.date = game_date
-        self.duration = game_duration
-        self.score = game_score
+        self.date: Optional[datetime.date] = game_date
+        self.duration: Optional[datetime.timedelta] = game_duration
+        self.score: Optional[int] = game_score
         self.players = players
 
         for player in self.players:
@@ -332,6 +332,9 @@ class Game:
     def player_count(self) -> int:
         return len(self.players)
 
+    def has_score(self) -> bool:
+        return self.score != -1
+
     def has_first_timers(self) -> bool:
         return any(player.first_timer() for player in self.players)
 
@@ -347,255 +350,20 @@ class Game:
         return round(individual * overlap)
 
     def calculate_score(self, weight: numpy.ndarray) -> numpy.ndarray:
-        participations = numpy.array([
+        particips = numpy.array([
             int(i in self.get_player_indices()) for i in range(len(weight) - 1)
         ] + [0])
         overlap = 1 - weight[-1] * math.log(self.player_count())
 
-        return numpy.dot(participations, weight) * overlap * Game.MAX_POINTS
-
-
-# Class for the complete history of all quizzes
-class History:
-
-    def __init__(self, *games: Game) -> None:
-        self.games: Tuple[Game] = games
-        self.ucrts: DefaultDict[Player, List[List[Player]]] = collections.defaultdict(list)
-
-        for player in self.get_all_players():
-            o = [
-                oth for oth in self.get_all_players().difference({player}) if
-                oth.games.issubset(player.games)
-            ]
-
-            for i in History.find_uncertainties(player.games, o):
-                self.ucrts[player].append(i)
-
-    @staticmethod
-    def find_uncertainties(
-            goal: Set[Game],
-            players: List[Player],
-            path: Optional[List[Player]] = None
-    ) -> Generator[List[Player], None, None]:
-
-        if path is None:
-            path = []
-
-        while players:
-            p = players.pop()
-            if not p.games.issubset(goal):
-                continue
-
-            if p.games == goal:
-                yield [p]
-
-            n_goal = goal.difference(p.games)
-            for n_path in History.find_uncertainties(n_goal, players, path+[p]):
-                yield n_path + [p]
-
-    def is_uncertain(self, player: Player) -> Tuple[bool, bool]:
-        induced = len(self.ucrts[player]) != 0
-        inducer = any(
-            any(
-                player in player_combination for player_combination in pc_list
-            ) for pc_list in self.ucrts.values()
-        )
-
-        return inducer, induced
-
-    def is_certain(self, player: Player) -> bool:
-        return all(ucrt is False for ucrt in self.is_uncertain(player))
-
-    # @staticmethod
-    # def get_common_knowledge(player_number: int) -> float:
-    #     common_knowledge = Game.WEIGHT_A * log(player_number) + Game.WEIGHT_B
-    #     return common_knowledge * Game.MAX_POINTS
-
-    def get_min_max(self, player: Player) -> Tuple[float, float]:
-        try:
-            minimum = player.weight - max((
-                min(comb, key=lambda p: p.weight)
-                for comb in [a for b in self.ucrts.values() for a in b]
-                if player in comb), key=lambda p: p.weight
-            ).weight
-        except ValueError:
-            minimum = player.weight
-
-        try:
-            maximum = player.weight + max((
-                min(comb, key=lambda p: p.weight)
-                for comb in self.ucrts[player]),
-                key=lambda p: p.weight
-            ).weight
-        except ValueError:
-            maximum = player.weight
-
-        return minimum, maximum
-
-    def _objective_function(
-
-            self, w: Optional[Union[numpy.ndarray, float]], reset=False) -> float:
-        print('test')
-        if reset:
-            players = sorted(self.get_all_players(), key=lambda p: p.index)
-            strengths = numpy.array([player.strength.value for player in players])
-            w = numpy.append(strengths * w, [Game.WEIGHT])
-
-        if w is None:
-            return sum(
-                (g.score - g.predict_score()) ** 2 for g in self.games
-            )
-
-        return sum(
-            (g.score - g.calculate_score(w)) ** 2 for g in self.games
-        ) + (w[-1] * (Game.MAX_POINTS / 2))
-
-    def minimize_weight(self, player: Player, set_to=None) -> NoReturn:
-        global WEIGHTS
-
-        file_name = f'data_{player.name.lower()}_minimized.csv'
-        p_to_max, p_to_min, by = max((
-            (p, comb, min(comb, key=lambda x: x.weight).weight)
-            for p, combinations in self.ucrts.items()
-            for comb in combinations if player in comb
-        ), key=lambda x: x[2])
-
-        if set_to is not None:
-            change = player.weight - set_to / Game.MAX_POINTS
-            assert(change <= by)
-            by = change
-            file_name = f'data_{player.name.lower()}_set_to_{set_to}.csv'
-
-        WEIGHTS.loc[p_to_max.index, 'weight'] = p_to_max.weight + by
-        for p in p_to_min:
-            WEIGHTS.loc[p.index, 'weight'] = p.weight - by
-        WEIGHTS.to_csv(file_name, index=False)
-
-    def maximize_weight(self, player: Player, set_to=None) -> NoReturn:
-        global WEIGHTS
-
-        file_name = f'data_{player.name.lower()}_maximized.csv'
-        p_to_max, p_to_min, by = max((
-            (player, comb, min(comb, key=lambda x: x.weight).weight)
-            for comb in self.ucrts[player]
-        ), key=lambda x: x[2])
-
-        if set_to is not None:
-            change = set_to / Game.MAX_POINTS - player.weight
-            assert (change <= by)
-            by = change
-            file_name = f'data_{player.name.lower()}_set_to_{set_to}.csv'
-
-        WEIGHTS.loc[p_to_max.index, 'weight'] = p_to_max.weight + by
-        for p in p_to_min:
-            WEIGHTS.loc[p.index, 'weight'] = p.weight - by
-        WEIGHTS.to_csv(file_name, index=False)
-
-    def recalculate_weights(self, r: bool = False) -> scipy.optimize.OptimizeResult:
-        global WEIGHTS
-
-        WEIGHTS = WEIGHTS.sort_values('name', ignore_index=True)
-        for player in self.get_all_players():
-            db_row = WEIGHTS.loc[WEIGHTS['name'] == player.name]
-            player.index = db_row.index
-
-        weights = WEIGHTS.loc[:, 'weight'].to_numpy()
-
-        if r:
-            objective_function = functools.partial(self._objective_function, reset=True)
-            result = scipy.optimize.minimize_scalar(objective_function)
-            players = sorted(self.get_all_players(), key=lambda p: p.index)
-            arr = numpy.array([player.strength.value for player in players])
-            WEIGHTS['weight'] = pandas.Series(numpy.append(arr * result.x, [Game.WEIGHT]))
-
-        else:
-            result = scipy.optimize.minimize(
-                self._objective_function, weights,
-                method='Nelder-Mead',
-                options={'xatol': 1e-8, 'disp': False},
-                bounds=scipy.optimize.Bounds(0)
-            )
-
-            WEIGHTS['weight'] = pandas.Series(result.x)
-
-        WEIGHTS.to_csv('data.csv', index=False)
-        for player in self.get_all_players():
-            db_row = WEIGHTS.loc[WEIGHTS['name'] == player.name]
-            player.weight = db_row.loc[player.index, 'weight'].item()
-
-        weight_a = WEIGHTS.loc[WEIGHTS['name'] == '~WEIGHT_A']
-        Game.WEIGHT = weight_a.loc[weight_a.index, 'weight'].item()
-
-        return result
-
-    def plot_history(self) -> NoReturn:
-        x, y = list(range(len(self.games))), [i.score for i in self.games]
-        matplotlib.pyplot.plot(x, y)
-
-        spline = scipy.interpolate.make_interp_spline(x, y)
-
-        X_ = numpy.linspace(0, len(self.games) - 1, 500)
-        Y_ = spline(X_)
-        matplotlib.pyplot.plot(X_, Y_)
-
-        ius = scipy.interpolate.Rbf(x, y)
-        Y_ = ius(X_)
-        matplotlib.pyplot.plot(X_, Y_)
-
-
-
-        #pyplot.gcf().autofmt_xdate()
-        matplotlib.pyplot.show()
-
-    def get_uncertainties(self, player: Player) -> NoReturn:
-        flat = [(p, a) for p, l in self.ucrts.items() for a in l if player in a]
-        unique_players = set([a.name for b in flat for a in b[1]])
-        if player.name in unique_players:
-            unique_players.remove(player.name)
-            print(f'People he/she should play with: '
-                  f'{", ".join(unique_players)}')
-
-        for underrated_player, comb in flat:
-            worst_player = min(comb, key=lambda x: x.weight)
-            print(
-                f'-{worst_player.weight * Game.MAX_POINTS:>5,.2f} | '
-                f' {underrated_player.name:<8} |'
-                f' {*comb,}'
-            )
-
-        flat = set([p.name for comb in self.ucrts[player] for p in comb])
-        if flat:
-            print(f'People that should play with each other: {", ".join(flat)}')
-
-        for comb in self.ucrts[player]:
-            worst_player = min(comb, key=lambda x: x.weight)
-            print(
-                f'+{worst_player.weight * Game.MAX_POINTS:>5,.2f} |'
-                f' {worst_player.name:<8} |'
-                f' {*comb,}'
-            )
-
-    def get_scoreboard(self) -> NoReturn:
-        players = sorted(list(self.get_all_players()), reverse=True)
-        for idx, player in enumerate(players, start=1):
-            minimum, maximum = self.get_min_max(player)
-            print(
-                f'#{idx:<2} |'
-                f' {player.get_score():>5,.2f} |'
-                f' {minimum * Game.MAX_POINTS:>5,.2f} -'
-                f' {maximum * Game.MAX_POINTS:>5,.2f} |'
-                f' {str(self.is_certain(player)):<5} | '
-                f'({len(player.get_match_history()):02}) |'
-                f' {player.name}'
-            )
-        print()
-
+        return numpy.dot(particips, weight) * overlap * constants.GAME_MAX_SCORE
 
 if __name__ == "__main__":
-    database = Database('optimal-timer-234608-a9f776f9605a.json')
+    database = Database('.config/personal-433622-62e046c7be64.json')
     ai = artificial_intelligence.ArtificialIntelligence(database)
-    ai.train(artificial_intelligence.NeuralNetwork, best_of=1000)
+    ai.train(artificial_intelligence.NeuralNetwork, best_of=100)
 
-    # ai.load(artificial_intelligence.NeuralNetwork, 'model.pt')
+    # ai.load(artificial_intelligence.NeuralNetwork, '[ 457] Model.pt')
     # for game in database.games:
     #     print(game.score, round(ai.infer(game)), round(ai.infer(game) - game.score))
+
+    # ai.save()
