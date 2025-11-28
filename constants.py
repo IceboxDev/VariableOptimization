@@ -17,12 +17,14 @@ Index = typing.Tuple[
 SPREADSHEET_NAME: Final[str] = 'Inventory - Board Games'
 WORKSHEET_NAME: Final[str] = 'Quiz Match History'
 
-GAME_DATES_COLUMN: Final[int] = 1
-GAME_DURATIONS_COLUMN: Final[int] = 2
-GAME_SCORES_COLUMN: Final[int] = 3
-GAME_PLAYERS_COLUMN: Final[int] = 8
-WEIGHTS_NAMES_COLUMN: Final[int] = 56
-WEIGHTS_WEIGHTS_COLUMN: Final[int] = 57
+GAME_DATES_COLUMN: Final[int] = 1          # A
+GAME_DURATIONS_COLUMN: Final[int] = 2      # B
+GAME_SCORES_COLUMN: Final[int] = 3         # C
+GAME_ANOMALY_COLUMN: Final[int] = 5        # new E (between old D and old E)
+GAME_PLAYERS_COLUMN: Final[int] = 9
+
+WEIGHTS_NAMES_COLUMN: Final[int] = 57
+WEIGHTS_WEIGHTS_COLUMN: Final[int] = 58
 
 PLAYER_PADDING: Final[int] = 2
 COLUMN_PADDING: Final[int] = 3
@@ -35,12 +37,16 @@ CELL_PLAYER_GRID_L: Final[Index] = (
     PLAYER_PADDING, GAME_PLAYERS_COLUMN, None, None)
 CELL_PLAYER_GRID_R: Final[Index] = (
     SPREADSHEET_MAX_ROWS, GAME_PLAYERS_COLUMN + GAME_MAX_PLAYERS, None, None)
+
 CELL_GAME_DATES: Final[Index] = (
     None, GAME_DATES_COLUMN, None, PLAYER_PADDING)
 CELL_GAME_DURATIONS: Final[Index] = (
     None, GAME_DURATIONS_COLUMN, None, PLAYER_PADDING)
 CELL_GAME_SCORES: Final[Index] = (
     None, GAME_SCORES_COLUMN, None, PLAYER_PADDING)
+CELL_GAME_ANOMALIES: Final[Index] = (
+    None, GAME_ANOMALY_COLUMN, None, PLAYER_PADDING)
+
 CELL_WEIGHTS_NAME: Final[Index] = (
     None, WEIGHTS_NAMES_COLUMN, None, COLUMN_PADDING)
 CELL_WEIGHTS_WEIGHT: Final[Index] = (

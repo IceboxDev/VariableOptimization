@@ -2,10 +2,36 @@ version: 2
 project: VariableOptimization
 
 env:
-    GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-0e9093102d75.json"
+  GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-62e046c7be64.json"
+  MPLBACKEND: "Agg"
 
 commands:
-    start:
-        help: Start the Variable Optimization project
-        exec: |
-            python main.py --config %{GOOGLE_APPLICATION_CREDENTIALS}
+  train:
+    help: Train the Variable Optimization model
+    args:
+      - best_of
+    exec: |
+      uv run python run_train.py ${best_of}
+
+  preview-games:
+    help: Pretty print games (optional model file)
+    args:
+      - model_file
+    exec: |
+      uv run python run_preview_games.py ${model_file}
+
+  player-eval:
+    help: Evaluate players with a model
+    args:
+      - model_file
+      - min_games?
+      - year?
+    exec: |
+      uv run python run_player_evaluation.py ${model_file} ${min_games} ${year}
+
+  mark-anomalies:
+    help: Mark statistical anomalies with a model
+    args:
+      - model_file
+    exec: |
+      uv run python run_mark_anomalies.py ${model_file}
