@@ -1,16 +1,25 @@
 """Model training and inference.
 
-Feature vector: binary player participation, columns in the fixed sorted-name
-order established by Database. Target: game score normalised by
-GAME_MAX_SCORE. Games are weighted by recency when ranking trained models.
+Feature vector: binary player participation. The column order is the model's
+*trained roster* (sorted player names at training time), persisted next to the
+weights as ``roster.json`` — so a model keeps working after the live roster
+grows. Training is orchestrated by :class:`ArtificialIntelligence` (pure, no
+file I/O); inference goes through :class:`Predictor`, which never depends on
+the live database.
 """
 
 import copy
+import dataclasses
+import json
 import logging
 import math
 import typing
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")  # plots are only ever saved, never shown
 
 import matplotlib.pyplot
 import numpy
@@ -18,9 +27,9 @@ import scipy.stats
 import torch
 import tqdm
 
-from . import constants
+from . import constants, runs
 from .database import Database
-from .domain import Game
+from .domain import Game, Player
 
 log = logging.getLogger(__name__)
 
@@ -127,45 +136,123 @@ class NeuralNetwork:
         )
 
 
-def resolve_model_path(reference: str) -> Path:
-    """Resolve a model reference to a file.
+class Predictor:
+    """Inference against a model's *trained* roster.
 
-    ``latest`` picks the newest ``*.pt`` in the models directory (falling back
-    to the legacy directory). Anything else is tried as given, then relative
-    to the models and legacy directories.
+    The roster fixes the feature-column order forever; players unknown to the
+    trained roster make a game unpredictable (``infer`` returns None) rather
+    than silently wrong.
     """
-    if reference == "latest":
-        candidates = sorted(
-            [
-                *Path(constants.MODELS_DIR).glob("*.pt"),
-                *Path(constants.LEGACY_MODELS_DIR).glob("*.pt"),
-            ],
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        if not candidates:
-            raise FileNotFoundError(
-                f"No trained models in {constants.MODELS_DIR}/ or "
-                f"{constants.LEGACY_MODELS_DIR}/ — run 'vopt train' first."
-            )
-        return candidates[0]
 
-    tried = [
-        Path(reference),
-        Path(constants.MODELS_DIR) / reference,
-        Path(constants.LEGACY_MODELS_DIR) / reference,
-    ]
-    for path in tried:
-        if path.is_file():
-            return path
-    raise FileNotFoundError(f"Model not found; tried: {[str(p) for p in tried]}")
+    def __init__(self, roster: list[str], network: NeuralNetwork) -> None:
+        self.roster = list(roster)
+        self.network = network
+        self._column = {name: index for index, name in enumerate(self.roster)}
+        self._warned: set[str] = set()
+
+    @classmethod
+    def load(cls, model_path: Path, device: torch.device | None = None) -> "Predictor":
+        roster_path = model_path.parent / constants.DEPLOYED_ROSTER_FILENAME
+        if not roster_path.is_file():
+            raise FileNotFoundError(
+                f"No roster next to the model: {roster_path} — a model is only "
+                "loadable together with the roster it was trained on."
+            )
+        with open(roster_path, encoding="utf-8") as handle:
+            roster = json.load(handle)
+
+        network = NeuralNetwork(len(roster), device=device)
+        network.load(model_path)
+        log.info("Loaded model %s (%d-player roster)", model_path, len(roster))
+        return cls(roster, network)
+
+    def save(self, model_path: Path, roster_path: Path) -> None:
+        self.network.save(model_path)
+        with open(roster_path, "w", encoding="utf-8") as handle:
+            json.dump(self.roster, handle, indent=2)
+            handle.write("\n")
+
+    def known(self, player: Player) -> bool:
+        return player.name in self._column
+
+    def column_of(self, player: Player) -> int:
+        return self._column[player.name]
+
+    def features_for(self, players: typing.Iterable[Player]) -> numpy.ndarray | None:
+        """Participation vector for a team, or None if any player is unknown
+        to the trained roster (warned once per name)."""
+        names = [player.name for player in players]
+        unknown = [name for name in names if name not in self._column]
+        if unknown:
+            for name in unknown:
+                if name not in self._warned:
+                    self._warned.add(name)
+                    log.warning(
+                        "Player %r is not in the trained roster — games with "
+                        "them cannot be predicted by this model", name,
+                    )
+            return None
+        features = numpy.zeros(len(self.roster), dtype=numpy.float32)
+        features[[self._column[name] for name in names]] = 1.0
+        return features
+
+    def infer(self, game: Game) -> float | None:
+        features = self.features_for(game.players)
+        if features is None:
+            return None
+        return float(self.infer_features(features.reshape(1, -1))[0])
+
+    def infer_features(self, features: numpy.ndarray) -> numpy.ndarray:
+        """Predict scores for a (batch, roster) participation matrix in one
+        forward pass. Column order must match ``self.roster``."""
+        tensor = torch.tensor(
+            features, dtype=torch.float32, device=self.network.device
+        )
+        predictions = self.network.infer(tensor) * constants.GAME_MAX_SCORE
+        return predictions.cpu().numpy()
+
+
+@dataclasses.dataclass
+class TrainingResult:
+    predictor: Predictor
+    best_loss: float
+    loss_history: list[float]
+
+
+def resolve_model(reference: str | None, output_dir: Path) -> Path:
+    """Resolve a model reference to a weights file.
+
+    ``None``/``deployed`` -> the promoted model; ``latest`` -> the newest
+    completed run; anything else is an explicit path (with a sibling
+    ``roster.json``).
+    """
+    output_dir = Path(output_dir)
+    if reference is None or reference == "deployed":
+        path = output_dir / constants.DEPLOYED_MODEL_FILENAME
+        if not path.is_file():
+            raise FileNotFoundError(
+                "No deployed model yet — run 'task train' first."
+            )
+        return path
+
+    if reference == "latest":
+        latest = runs.find_latest_run(runs.runs_root(output_dir))
+        if latest is None:
+            raise FileNotFoundError(
+                "No completed training runs yet — run 'task train' first."
+            )
+        return latest / "model.pt"
+
+    path = Path(reference)
+    if path.is_file():
+        return path
+    raise FileNotFoundError(f"Model not found: {reference}")
 
 
 class ArtificialIntelligence:
     def __init__(self, database: Database, device: torch.device | None = None) -> None:
         self.database = database
         self.device = device or get_device()
-        self.algorithm: NeuralNetwork | None = None
         self.players = list(database.players.values())
 
         scored = database.scored_games
@@ -211,9 +298,14 @@ class ArtificialIntelligence:
         self.complete_x = features
         self.complete_y = targets.flatten()
 
-    def _train_once(self, algorithm_class: type) -> tuple[typing.Any, float]:
+    def _train_once(
+        self, algorithm_class: type, epochs: int
+    ) -> tuple[NeuralNetwork, float]:
         algorithm = algorithm_class(self.train_x.shape[1], device=self.device)
-        algorithm.train(self.train_x, self.train_y, self.validate_x, self.validate_y)
+        algorithm.train(
+            self.train_x, self.train_y, self.validate_x, self.validate_y,
+            epochs=epochs,
+        )
 
         prediction = algorithm.infer(self.complete_x)
         difference = (self.complete_y - prediction) * constants.GAME_MAX_SCORE
@@ -226,11 +318,11 @@ class ArtificialIntelligence:
         best_of: int = 100,
         seed: int | None = None,
         workers: int = 1,
-    ) -> tuple[Path, float]:
-        """Train ``best_of`` candidates, keep the best, save model + loss plot.
-
-        Runs are reproducible for a given seed only with ``workers=1``.
-        Returns (model path, best loss).
+        epochs: int = 1000,
+    ) -> TrainingResult:
+        """Train ``best_of`` candidates and return the best, wrapped with the
+        training roster. Pure computation — persisting the result is the
+        caller's job. Reproducible for a given seed only with ``workers=1``.
         """
         log.info("Training on %s", self.device)
         if self.device.type == "cuda":
@@ -239,14 +331,14 @@ class ArtificialIntelligence:
             torch.manual_seed(seed)
             numpy.random.seed(seed)
 
-        best_loss, loss_history = math.inf, []
+        best_loss, best_network, loss_history = math.inf, None, []
         progress = tqdm.tqdm(desc="Training", total=best_of, postfix={"best": math.inf})
 
-        def record(algorithm: typing.Any, loss: float) -> None:
-            nonlocal best_loss
+        def record(network: NeuralNetwork, loss: float) -> None:
+            nonlocal best_loss, best_network
             loss_history.append(loss)
             if loss < best_loss:
-                best_loss, self.algorithm = loss, algorithm
+                best_loss, best_network = loss, network
                 progress.set_postfix({"best": round(best_loss)})
             progress.update(1)
 
@@ -254,77 +346,48 @@ class ArtificialIntelligence:
             if workers > 1:
                 with ThreadPool(workers) as pool:
                     results = pool.imap_unordered(
-                        lambda _: self._train_once(algorithm_class), range(best_of)
+                        lambda _: self._train_once(algorithm_class, epochs),
+                        range(best_of),
                     )
-                    for algorithm, loss in results:
-                        record(algorithm, loss)
+                    for network, loss in results:
+                        record(network, loss)
             else:
                 for _ in range(best_of):
-                    record(*self._train_once(algorithm_class))
+                    record(*self._train_once(algorithm_class, epochs))
 
-        models_dir = Path(constants.MODELS_DIR)
-        models_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{algorithm_class.__name__.lower()}-{best_loss:04.0f}"
-        model_path = models_dir / f"{stem}.pt"
-        self.algorithm.save(model_path)
-        self._save_loss_plot(loss_history, best_loss, models_dir / f"{stem}.png")
-        return model_path, best_loss
-
-    @staticmethod
-    def _save_loss_plot(
-        loss_history: list[float], best_loss: float, path: Path
-    ) -> None:
-        figure, axes = matplotlib.pyplot.subplots()
-        losses = sorted(loss_history)
-        mean, std = numpy.mean(losses), numpy.std(losses)
-        density = scipy.stats.norm.pdf(losses, mean, std)
-
-        axes.plot(losses, density)
-        axes.axvline(x=best_loss, color="r", linestyle="--")
-        axes.axvline(x=mean, color="y", linestyle="-")
-        axes.axvline(x=mean + std, color="y", linestyle="--")
-        axes.axvline(x=mean - std, color="y", linestyle="--")
-
-        label_height = numpy.max(density) / 2
-        for value, text in ((best_loss, "Best"), (mean, "Mean"), (mean + std, "STD")):
-            axes.text(
-                value, label_height, f"{text}: {value:.0f}",
-                horizontalalignment="right", verticalalignment="center",
-                rotation="vertical",
-            )
-
-        axes.set_title("Loss Distribution")
-        axes.set_xlabel("Loss")
-        axes.set_ylabel("Probability")
-        figure.savefig(path)
-        matplotlib.pyplot.close(figure)
-
-    def load(self, model_reference: str, algorithm_class: type = NeuralNetwork) -> Path:
-        path = resolve_model_path(model_reference)
-        self.algorithm = algorithm_class(self.train_x.shape[1], device=self.device)
-        try:
-            self.algorithm.load(path)
-        except RuntimeError as error:
-            raise RuntimeError(
-                f"Model {path} does not fit the current roster of "
-                f"{self.train_x.shape[1]} players — it was trained on older "
-                "data. Retrain with 'vopt train'."
-            ) from error
-        log.info("Loaded model %s", path)
-        return path
-
-    def infer(self, game: Game) -> float:
-        features = numpy.array(
-            [[player in game.players for player in self.players]],
-            dtype=numpy.float32,
+        roster = [player.name for player in self.players]
+        return TrainingResult(
+            predictor=Predictor(roster, best_network),
+            best_loss=best_loss,
+            loss_history=loss_history,
         )
-        return float(self.infer_features(features)[0])
 
-    def infer_features(self, features: numpy.ndarray) -> numpy.ndarray:
-        """Predict scores for a (batch, players) participation matrix in one
-        forward pass. Column order must match ``self.players``."""
-        if self.algorithm is None:
-            raise RuntimeError("No model loaded — call train() or load() first.")
-        tensor = torch.tensor(features, dtype=torch.float32, device=self.device)
-        predictions = self.algorithm.infer(tensor) * constants.GAME_MAX_SCORE
-        return predictions.cpu().numpy()
+
+def save_loss_plot(loss_history: list[float], best_loss: float, path: Path) -> None:
+    figure, axes = matplotlib.pyplot.subplots()
+    losses = sorted(loss_history)
+    mean, std = numpy.mean(losses), numpy.std(losses)
+
+    if std > 0:  # a single candidate has no distribution to draw
+        density = scipy.stats.norm.pdf(losses, mean, std)
+        axes.plot(losses, density)
+        label_height = numpy.max(density) / 2
+    else:
+        label_height = 0.5
+
+    axes.axvline(x=best_loss, color="r", linestyle="--")
+    axes.axvline(x=mean, color="y", linestyle="-")
+    axes.axvline(x=mean + std, color="y", linestyle="--")
+    axes.axvline(x=mean - std, color="y", linestyle="--")
+    for value, text in ((best_loss, "Best"), (mean, "Mean"), (mean + std, "STD")):
+        axes.text(
+            value, label_height, f"{text}: {value:.0f}",
+            horizontalalignment="right", verticalalignment="center",
+            rotation="vertical",
+        )
+
+    axes.set_title("Loss Distribution")
+    axes.set_xlabel("Loss")
+    axes.set_ylabel("Probability")
+    figure.savefig(path)
+    matplotlib.pyplot.close(figure)

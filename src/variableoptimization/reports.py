@@ -1,7 +1,13 @@
-"""User-facing reports: game preview tables, player rankings, anomaly detection."""
+"""User-facing reports: game preview tables, player rankings, anomaly detection.
+
+All reports predict through a :class:`Predictor` and therefore work with any
+trained model, including one older than the live roster — games involving
+players the model never saw show no prediction instead of a wrong one.
+"""
 
 import datetime
 import itertools
+import logging
 import math
 from collections import defaultdict
 
@@ -13,18 +19,20 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import constants
-from .ai import ArtificialIntelligence
+from .ai import Predictor
 from .database import Database
 from .domain import Game
+
+log = logging.getLogger(__name__)
 
 console = Console()
 
 
-def preview_games(database: Database, ai: ArtificialIntelligence | None = None) -> None:
+def preview_games(database: Database, predictor: Predictor | None = None) -> None:
     """Print one panel per year. Column widths are computed globally so every
     panel lines up."""
     headers = ["#", "Date", "Score", "Anomaly", "Players"]
-    if ai is not None:
+    if predictor is not None:
         headers += ["Prediction", "Δ(Pred)"]
     widths = {header: len(header) for header in headers}
 
@@ -50,18 +58,24 @@ def preview_games(database: Database, ai: ArtificialIntelligence | None = None) 
                 "Anomaly": "✅" if game.is_anomaly else "",
                 "Players": ", ".join(player.name for player in game.players),
             }
-            if ai is not None:
-                prediction = ai.infer(game)
-                row["Prediction"] = f"{prediction:.2f}"
-                if game.has_score():
-                    delta = prediction - game.score
-                    color = "red" if delta > 0 else "green" if delta < 0 else None
-                    plain = f"{delta:+.2f}"
-                    row["Δ(Pred)"] = f"[{color}]{plain}[/{color}]" if color else plain
-                    # Width bookkeeping must use the plain text, not the markup.
-                    widths["Δ(Pred)"] = max(widths["Δ(Pred)"], len(plain))
-                else:
+            if predictor is not None:
+                prediction = predictor.infer(game)
+                if prediction is None:
+                    row["Prediction"] = "-"
                     row["Δ(Pred)"] = "-"
+                else:
+                    row["Prediction"] = f"{prediction:.2f}"
+                    if game.has_score():
+                        delta = prediction - game.score
+                        color = "red" if delta > 0 else "green" if delta < 0 else None
+                        plain = f"{delta:+.2f}"
+                        row["Δ(Pred)"] = (
+                            f"[{color}]{plain}[/{color}]" if color else plain
+                        )
+                        # Width bookkeeping must use plain text, not markup.
+                        widths["Δ(Pred)"] = max(widths["Δ(Pred)"], len(plain))
+                    else:
+                        row["Δ(Pred)"] = "-"
             for header in headers:
                 if header != "Δ(Pred)":
                     widths[header] = max(widths[header], len(row[header]))
@@ -75,7 +89,7 @@ def preview_games(database: Database, ai: ArtificialIntelligence | None = None) 
         table.add_column("Score", justify="right", width=widths["Score"], no_wrap=True)
         table.add_column("Anomaly", justify="center", width=widths["Anomaly"], no_wrap=True)
         table.add_column("Players", width=widths["Players"])
-        if ai is not None:
+        if predictor is not None:
             table.add_column("Prediction", justify="right", width=widths["Prediction"], no_wrap=True)
             table.add_column("Δ(Pred)", justify="right", width=widths["Δ(Pred)"], no_wrap=True)
 
@@ -86,7 +100,7 @@ def preview_games(database: Database, ai: ArtificialIntelligence | None = None) 
 
 def evaluate_players(
     database: Database,
-    ai: ArtificialIntelligence,
+    predictor: Predictor,
     min_games: int | None = None,
     year: int | None = None,
     team_size: int = constants.TEAM_SIZE,
@@ -110,6 +124,15 @@ def evaluate_players(
         for player in database.players.values()
         if min_games is None or len(relevant_games(player)) >= min_games
     ]
+
+    outside_roster = [p.name for p in eligible if not predictor.known(p)]
+    if outside_roster:
+        log.warning(
+            "Excluding %d player(s) unknown to the trained roster: %s",
+            len(outside_roster), ", ".join(sorted(outside_roster)),
+        )
+        eligible = [player for player in eligible if predictor.known(player)]
+
     if len(eligible) < team_size:
         console.print(
             f"Only {len(eligible)} players match the filters — "
@@ -128,7 +151,7 @@ def evaluate_players(
         return
 
     # Map each eligible player to their feature-vector column once.
-    columns = numpy.array([ai.players.index(player) for player in eligible])
+    columns = numpy.array([predictor.column_of(player) for player in eligible])
 
     counts = numpy.zeros(len(eligible))
     sums = numpy.zeros(len(eligible))
@@ -140,11 +163,13 @@ def evaluate_players(
         batch = numpy.array(
             list(itertools.islice(teams, constants.EVAL_BATCH_SIZE))
         )
-        features = numpy.zeros((len(batch), len(ai.players)), dtype=numpy.float32)
+        features = numpy.zeros(
+            (len(batch), len(predictor.roster)), dtype=numpy.float32
+        )
         rows = numpy.repeat(numpy.arange(len(batch)), team_size)
         features[rows, columns[batch.ravel()]] = 1.0
 
-        predictions = ai.infer_features(features)
+        predictions = predictor.infer_features(features)
         member = batch.ravel()
         per_member = numpy.repeat(predictions, team_size)
         numpy.add.at(counts, member, 1)
@@ -184,29 +209,48 @@ def evaluate_players(
 
 def find_anomalies(
     database: Database,
-    ai: ArtificialIntelligence,
+    predictor: Predictor,
     threshold: float = 2.0,
 ) -> dict[int, bool]:
     """Flag scored games whose prediction residual is a statistical outlier.
 
     Prints a report and returns {worksheet row: is_anomaly} for every game
-    with a known row — ready for SheetsSource.save_anomalies (unscored games
-    are always False, and previously set flags get cleared).
+    with a known row — ready for SheetsSource.save_anomalies. Unscored games
+    and games outside the trained roster are always False.
     """
     scored = database.scored_games
-    predictions = numpy.array([ai.infer(game) for game in scored])
-    residuals = predictions - numpy.array([game.score for game in scored])
+    predicted = [
+        (game, prediction)
+        for game in scored
+        if (prediction := predictor.infer(game)) is not None
+    ]
+    skipped = len(scored) - len(predicted)
+    if skipped:
+        log.warning(
+            "%d scored game(s) contain players outside the trained roster "
+            "and were skipped", skipped,
+        )
+    if len(predicted) < 3:
+        console.print("Not enough predictable games for anomaly statistics.")
+        return {
+            game.sheet_row: False
+            for game in database.games
+            if game.sheet_row is not None
+        }
+
+    predictions = numpy.array([prediction for _, prediction in predicted])
+    residuals = predictions - numpy.array([game.score for game, _ in predicted])
 
     deviation = residuals.std()
     z_scores = (residuals - residuals.mean()) / deviation if deviation else residuals * 0.0
     flagged = {
         game: (z, prediction)
-        for game, z, prediction in zip(scored, z_scores, predictions)
+        for (game, prediction), z in zip(predicted, z_scores)
         if abs(z) >= threshold
     }
 
     table = Table(
-        title=f"Anomalies (|z| ≥ {threshold}, {len(flagged)}/{len(scored)} games)",
+        title=f"Anomalies (|z| ≥ {threshold}, {len(flagged)}/{len(predicted)} games)",
         box=box.SIMPLE_HEAVY,
     )
     for header in ("Date", "Players", "Actual", "Predicted", "z", "Was"):

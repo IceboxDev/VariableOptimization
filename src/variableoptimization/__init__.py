@@ -12,6 +12,7 @@ __all__ = [
     "Game",
     "NeuralNetwork",
     "Player",
+    "Predictor",
     "Snapshot",
     "load_database",
 ]
@@ -20,7 +21,7 @@ __all__ = [
 def __getattr__(name: str):
     # Lazy: importing the ai module pulls in torch (~seconds); commands that
     # never touch a model shouldn't pay for it.
-    if name in ("ArtificialIntelligence", "NeuralNetwork"):
+    if name in ("ArtificialIntelligence", "NeuralNetwork", "Predictor"):
         from . import ai
 
         return getattr(ai, name)

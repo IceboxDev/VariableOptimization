@@ -4,10 +4,14 @@
 
 Commands: train, preview, eval, mark-anomalies, refresh.
 Data options select where game data comes from (Sheets, xlsx clone, cache).
+Model references: ``deployed`` (the promoted model, default), ``latest``
+(newest completed run), or an explicit path.
 """
 
 import argparse
+import datetime
 import logging
+import statistics
 import sys
 from pathlib import Path
 
@@ -61,29 +65,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands = parser.add_subparsers(dest="command", required=True)
 
-    train = commands.add_parser("train", help="train a model, keep the best of N runs")
+    train = commands.add_parser(
+        "train", help="train a model as a tracked run under output/runs/"
+    )
     train.add_argument("--best-of", type=int, default=100)
     train.add_argument("--seed", type=int, default=None, help="reproducible runs (workers=1)")
     train.add_argument("--workers", type=int, default=1, help="parallel training threads")
+    train.add_argument("--epochs", type=int, default=1000, help="epochs per candidate")
+    train.add_argument("--note", default=None, help="changelog note for this run")
+    train.add_argument("--suffix", default=None, help="run-id suffix (e.g. 'demo')")
 
     preview = commands.add_parser("preview", help="pretty-print all games by year")
     preview.add_argument(
         "--model",
         nargs="?",
-        const="latest",
+        const="deployed",
         default=None,
-        help="add prediction columns ('latest' or a model path)",
+        help="add prediction columns (deployed | latest | path)",
     )
 
     evaluate = commands.add_parser("eval", help="rank players by predicted team scores")
-    evaluate.add_argument("--model", default="latest")
+    evaluate.add_argument("--model", default="deployed")
     evaluate.add_argument("--min-games", type=int, default=None)
     evaluate.add_argument("--year", type=int, default=None)
 
     anomalies = commands.add_parser(
         "mark-anomalies", help="detect statistical outliers; dry-run unless --write"
     )
-    anomalies.add_argument("--model", default="latest")
+    anomalies.add_argument("--model", default="deployed")
     anomalies.add_argument("--threshold", type=float, default=2.0, help="z-score cutoff")
     anomalies.add_argument(
         "--write", action="store_true", help="write flags back to the Google Sheet"
@@ -111,13 +120,119 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return run_command(args, settings)
-    except (DataSourceError, FileNotFoundError, RuntimeError) as error:
+    except (DataSourceError, FileNotFoundError, FileExistsError, RuntimeError) as error:
         log.error("%s", error)
         return 1
 
 
+def run_train(args: argparse.Namespace, settings: DataSettings) -> int:
+    """The tracked-run pipeline: run dir -> train -> gate -> manifest ->
+    changelog -> latest. A failed run keeps only its log and stays invisible
+    to `latest`, the changelog, and previous-run lookups."""
+    import json
+
+    from . import promotion, runs, snapshot as snapshot_module
+    from .ai import ArtificialIntelligence, save_loss_plot
+
+    output_dir = Path(constants.OUTPUT_DIR)
+    root = runs.runs_root(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+
+    run_id = runs.generate_run_id(suffix=args.suffix)
+    paths = runs.create_run_dir(root, run_id)
+
+    handler = logging.FileHandler(paths.log_path)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    try:
+        log.info("Run %s started", run_id)
+        database = load_database(settings)
+
+        config = {
+            "best_of": args.best_of,
+            "seed": args.seed,
+            "workers": args.workers,
+            "epochs": args.epochs,
+            "source": settings.source,
+        }
+        with open(paths.config_path, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+
+        result = ArtificialIntelligence(database).train(
+            best_of=args.best_of,
+            seed=args.seed,
+            workers=args.workers,
+            epochs=args.epochs,
+        )
+        result.predictor.save(paths.model_path, paths.roster_path)
+        save_loss_plot(result.loss_history, result.best_loss, paths.plot_path)
+
+        metrics = {
+            "best_loss": result.best_loss,
+            "mean_loss": statistics.mean(result.loss_history),
+            "std_loss": statistics.pstdev(result.loss_history),
+        }
+        fingerprint = snapshot_module.fingerprint(database.snapshot)
+
+        previous = runs.previous_manifest(root, run_id)
+        delta_vs_prev = None
+        if previous is not None:
+            comparable = previous["dataset"]["fingerprint"] == fingerprint
+            delta_vs_prev = {
+                "prev_run_id": previous["run_id"],
+                "best_loss": (
+                    result.best_loss - previous["metrics"]["best_loss"]
+                    if comparable
+                    else None
+                ),
+                "comparable": comparable,
+            }
+
+        decision = promotion.decide_promotion(
+            promotion.load_status_quo(output_dir), fingerprint, result.best_loss
+        )
+        if decision.promote:
+            promotion.apply_promotion(paths, output_dir, run_id, fingerprint, metrics)
+
+        sha, dirty = runs.git_state()
+        manifest = {
+            "run_id": run_id,
+            "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "git": {"sha": sha, "dirty": dirty},
+            "note": args.note,
+            "dataset": {
+                "fingerprint": fingerprint,
+                "games": len(database.games),
+                "scored_games": len(database.scored_games),
+                "players": len(database.players),
+            },
+            "config": config,
+            "metrics": metrics,
+            "delta_vs_prev": delta_vs_prev,
+            "promoted": decision.promote,
+            "promotion_reason": decision.reason,
+        }
+        runs.write_manifest(paths, manifest)
+        runs.prepend_changelog(
+            runs.changelog_path(output_dir), runs.format_changelog_entry(manifest)
+        )
+        runs.update_latest(root, run_id)
+
+        stamp = "✅ promoted" if decision.promote else "❌ not promoted"
+        print(
+            f"Run {run_id}: best loss {result.best_loss:.0f} — "
+            f"{stamp} ({decision.reason})\n"
+            f"Artifacts: {paths.root}"
+        )
+        return 0
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+
+
 def run_command(args: argparse.Namespace, settings: DataSettings) -> int:
-    # Imported here so `vopt refresh` etc. don't pay the torch import cost.
+    # Heavy imports happen per-command so data-only commands stay fast.
     if args.command == "refresh":
         refresh_settings = DataSettings(**{**vars(settings), "source": "sheets"})
         database = load_database(refresh_settings)
@@ -127,39 +242,33 @@ def run_command(args: argparse.Namespace, settings: DataSettings) -> int:
         )
         return 0
 
+    if args.command == "train":
+        return run_train(args, settings)
+
     database = load_database(settings)
 
-    from .ai import ArtificialIntelligence
     from . import reports
+    from .ai import Predictor, resolve_model
 
-    if args.command == "train":
-        ai = ArtificialIntelligence(database)
-        model_path, best_loss = ai.train(
-            best_of=args.best_of, seed=args.seed, workers=args.workers
-        )
-        print(f"Best loss {best_loss:.0f} — saved {model_path}")
-        return 0
+    output_dir = Path(constants.OUTPUT_DIR)
 
     if args.command == "preview":
-        ai = None
+        predictor = None
         if args.model is not None:
-            ai = ArtificialIntelligence(database)
-            ai.load(args.model)
-        reports.preview_games(database, ai)
+            predictor = Predictor.load(resolve_model(args.model, output_dir))
+        reports.preview_games(database, predictor)
         return 0
 
     if args.command == "eval":
-        ai = ArtificialIntelligence(database)
-        ai.load(args.model)
+        predictor = Predictor.load(resolve_model(args.model, output_dir))
         reports.evaluate_players(
-            database, ai, min_games=args.min_games, year=args.year
+            database, predictor, min_games=args.min_games, year=args.year
         )
         return 0
 
     if args.command == "mark-anomalies":
-        ai = ArtificialIntelligence(database)
-        ai.load(args.model)
-        flags = reports.find_anomalies(database, ai, threshold=args.threshold)
+        predictor = Predictor.load(resolve_model(args.model, output_dir))
+        flags = reports.find_anomalies(database, predictor, threshold=args.threshold)
         if args.write:
             from .sources import SheetsSource
 
