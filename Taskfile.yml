@@ -1,0 +1,65 @@
+version: "3"
+
+dotenv: [".env"]
+
+env:
+  GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-62e046c7be64.json"
+  MPLBACKEND: "Agg"
+
+tasks:
+  sync:
+    desc: Install/update the virtual environment.
+    cmds:
+      - uv sync
+
+  test:
+    desc: Run the test suite.
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  train:
+    desc: Train a model, keeping the best of BEST_OF runs (task train BEST_OF=100 SEED=42).
+    cmds:
+      - >
+        uv run vopt train
+        --best-of {{.BEST_OF | default "100"}}
+        {{if .SEED}}--seed {{.SEED}}{{end}}
+        {{if .WORKERS}}--workers {{.WORKERS}}{{end}}
+        {{.CLI_ARGS}}
+
+  preview:
+    desc: Pretty-print all games by year (task preview MODEL=latest adds predictions).
+    cmds:
+      - >
+        uv run vopt preview
+        {{if .MODEL}}--model "{{.MODEL}}"{{end}}
+        {{.CLI_ARGS}}
+
+  eval:
+    desc: Rank players by predicted team scores (task eval MIN_GAMES=3 YEAR=2025).
+    cmds:
+      - >
+        uv run vopt eval
+        --model "{{.MODEL | default "latest"}}"
+        {{if .MIN_GAMES}}--min-games {{.MIN_GAMES}}{{end}}
+        {{if .YEAR}}--year {{.YEAR}}{{end}}
+        {{.CLI_ARGS}}
+
+  anomalies:
+    desc: Detect statistical outliers; dry-run by default (task anomalies -- --write).
+    cmds:
+      - >
+        uv run vopt mark-anomalies
+        --model "{{.MODEL | default "latest"}}"
+        {{if .THRESHOLD}}--threshold {{.THRESHOLD}}{{end}}
+        {{.CLI_ARGS}}
+
+  refresh:
+    desc: Force-refresh the snapshot cache from Google Sheets.
+    cmds:
+      - uv run vopt refresh
+
+  clean:
+    desc: Remove the snapshot cache and trained model artifacts.
+    cmds:
+      - rm -rf .cache models
