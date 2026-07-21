@@ -22,7 +22,6 @@ Everything runs through [Task](https://taskfile.dev):
 
 ```bash
 task train BEST_OF=100 NOTE="why this run"   # tracked run (anomaly-flagged games excluded)
-task changelog                               # newest changelog entries
 task preview MODEL=deployed                  # games by year, with predictions
 task eval MIN_GAMES=3 YEAR=2025              # rank players by predicted team scores
 task rank                                    # per-player strength from the model (dry run)

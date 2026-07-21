@@ -56,8 +56,3 @@ tasks:
         {{if .THRESHOLD}}--threshold {{.THRESHOLD}}{{end}}
         {{if .TOP}}--top {{.TOP}}{{end}}
         {{.CLI_ARGS}}
-
-  changelog:
-    desc: Show the newest training changelog entries.
-    cmds:
-      - head -n 40 output/CHANGELOG.md

@@ -24,7 +24,6 @@ tests, cache management) runs through uv directly:
 uv sync                                    # install/update environment
 uv run pytest                              # run after any change
 task train BEST_OF=100 NOTE="why"          # tracked run -> output/runs/<run_id>/
-task changelog                             # newest changelog entries
 task preview MODEL=deployed                # games by year (+predictions with MODEL)
 task eval MIN_GAMES=3 YEAR=2025            # rank players (variables use UNDERSCORES)
 task rank -- --write                       # model-derived strengths -> sheet BE/BF (dry-run without --write)
