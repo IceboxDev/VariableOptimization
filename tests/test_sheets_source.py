@@ -73,8 +73,9 @@ def test_save_anomalies_writes_contiguous_column():
 
     [(range_name, values)] = worksheet.updates
     assert range_name == "E2:E4"
-    # Row 3 is inside the span but unknown -> explicitly FALSE, never blank.
-    assert values == [["TRUE"], ["FALSE"], ["FALSE"]]
+    # Row 3 is inside the span but unknown -> explicitly False, never blank.
+    # Real booleans, not strings — string "FALSE" would be stored as text.
+    assert values == [[True], [False], [False]]
 
 
 def test_save_anomalies_with_no_flags_is_a_no_op():

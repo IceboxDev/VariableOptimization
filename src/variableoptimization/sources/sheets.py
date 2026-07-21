@@ -87,14 +87,16 @@ class SheetsSource:
         """Write the anomaly column for the given worksheet rows.
 
         ``flags`` maps 1-based worksheet rows to their anomaly state. Rows
-        inside the written span that are missing from ``flags`` are set FALSE.
+        inside the written span that are missing from ``flags`` are set False.
+        Values are written as real booleans — writing the *string* "FALSE"
+        would store text (shown with a leading apostrophe in Sheets).
         """
         if not flags:
             return
 
         first_row, last_row = min(flags), max(flags)
         values = [
-            ["TRUE" if flags.get(row, False) else "FALSE"]
+            [bool(flags.get(row, False))]
             for row in range(first_row, last_row + 1)
         ]
         cell_range = (
