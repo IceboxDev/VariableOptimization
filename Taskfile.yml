@@ -4,7 +4,6 @@ dotenv: [".env"]
 
 env:
   GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-62e046c7be64.json"
-  MPLBACKEND: "Agg"
 
 tasks:
   sync:
@@ -18,17 +17,20 @@ tasks:
       - uv run pytest {{.CLI_ARGS}}
 
   train:
-    desc: Train a model, keeping the best of BEST_OF runs (task train BEST_OF=100 SEED=42).
+    desc: Tracked training run (task train BEST_OF=100 SEED=42 NOTE="why this run").
     cmds:
       - >
         uv run vopt train
         --best-of {{.BEST_OF | default "100"}}
         {{if .SEED}}--seed {{.SEED}}{{end}}
         {{if .WORKERS}}--workers {{.WORKERS}}{{end}}
+        {{if .EPOCHS}}--epochs {{.EPOCHS}}{{end}}
+        {{if .NOTE}}--note "{{.NOTE}}"{{end}}
+        {{if .SUFFIX}}--suffix "{{.SUFFIX}}"{{end}}
         {{.CLI_ARGS}}
 
   preview:
-    desc: Pretty-print all games by year (task preview MODEL=latest adds predictions).
+    desc: Pretty-print all games by year (task preview MODEL=deployed adds predictions).
     cmds:
       - >
         uv run vopt preview
@@ -40,7 +42,7 @@ tasks:
     cmds:
       - >
         uv run vopt eval
-        --model "{{.MODEL | default "latest"}}"
+        --model "{{.MODEL | default "deployed"}}"
         {{if .MIN_GAMES}}--min-games {{.MIN_GAMES}}{{end}}
         {{if .YEAR}}--year {{.YEAR}}{{end}}
         {{.CLI_ARGS}}
@@ -50,9 +52,14 @@ tasks:
     cmds:
       - >
         uv run vopt mark-anomalies
-        --model "{{.MODEL | default "latest"}}"
+        --model "{{.MODEL | default "deployed"}}"
         {{if .THRESHOLD}}--threshold {{.THRESHOLD}}{{end}}
         {{.CLI_ARGS}}
+
+  changelog:
+    desc: Show the newest training changelog entries.
+    cmds:
+      - head -n 40 output/CHANGELOG.md
 
   refresh:
     desc: Force-refresh the snapshot cache from Google Sheets.
@@ -60,6 +67,12 @@ tasks:
       - uv run vopt refresh
 
   clean:
-    desc: Remove the snapshot cache and trained model artifacts.
+    desc: Remove the snapshot cache.
     cmds:
-      - rm -rf .cache models
+      - rm -rf .cache
+
+  clean-output:
+    desc: DESTRUCTIVE — remove all runs, the deployed model, and the changelog.
+    prompt: This deletes output/ including CHANGELOG.md and the deployed model. Continue?
+    cmds:
+      - rm -rf output

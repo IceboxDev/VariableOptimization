@@ -6,9 +6,11 @@ Guidance for Claude Code when working in this repository.
 
 Pub-quiz score prediction. Game data lives in a Google Sheet
 ("Inventory - Board Games" → worksheet "Quiz Match History") or a local xlsx
-export of it. A PyTorch network learns to predict a team's score from its
-player composition; the CLI previews games, ranks players, and flags
-anomalous results.
+export at `data/board-games.xlsx`. A PyTorch network learns to predict a
+team's score from its player composition. Training runs are tracked
+ntire-eol-style: one folder per run under `output/runs/`, a newest-first
+`output/CHANGELOG.md`, and a promotion gate deciding what `output/model.pt`
+(the deployed model) is.
 
 ## Commands
 
@@ -16,81 +18,79 @@ anomalous results.
 wraps the `vopt` CLI:
 
 ```bash
-task sync                          # uv sync
-task test                          # pytest — run after any change
-task train BEST_OF=100 SEED=42     # train, keep best of N candidates
-task preview MODEL=latest          # games by year (+predictions with MODEL)
-task eval MIN_GAMES=3 YEAR=2025    # rank players by predicted team scores
-task anomalies                     # outlier report, dry-run
-task anomalies -- --write          # ...and write flags to the live sheet
-task refresh                       # force-refresh the snapshot cache
+task sync                                  # uv sync
+task test                                  # pytest — run after any change
+task train BEST_OF=100 NOTE="why"          # tracked run -> output/runs/<run_id>/
+task changelog                             # newest changelog entries
+task preview MODEL=deployed                # games by year (+predictions with MODEL)
+task eval MIN_GAMES=3 YEAR=2025            # rank players (variables use UNDERSCORES)
+task anomalies -- --write                  # outlier flags -> live sheet (dry-run without --write)
+task refresh                               # force-refresh snapshot cache
+task clean-output                          # DESTRUCTIVE, prompts — wipes runs+changelog
 ```
 
-`uv run vopt --help` for the full CLI. Every command accepts
-`--source {auto,sheets,xlsx,cache}` — use `--source xlsx` or `--source cache`
-to work offline; `auto` prefers a <3 h cache, then Sheets, then a stale cache.
+Model references: `deployed` (promoted model, default), `latest` (newest
+completed run), or an explicit path. Data source: `-- --source {auto,sheets,xlsx,cache}`.
 
 ## Architecture (src/variableoptimization/)
 
 Data flows one way: **source → Snapshot → Database → AI → reports**.
+Run tracking sits beside it: **cli.run_train → runs.py (layout) + promotion.py (gate)**.
 
-- `snapshot.py` — the transport contract. Every source produces the same
-  `Snapshot`: raw *strings* in worksheet conventions (`MM/DD/YY` dates,
-  `TRUE`/`FALSE` anomalies), row-aligned per record, with the originating
-  worksheet row kept for write-backs.
-- `sources/` — `sheets.py` (live sheet), `xlsx.py` (offline clone),
-  `cache.py` (versioned JSON, 3 h TTL, atomic writes). Interchangeable and
-  verified identical on identical data.
-- `database.py` — the **only** place snapshot strings are parsed into domain
-  objects. Malformed cells degrade with a logged warning, never crash.
-- `domain.py` — `Player` (identity = name) and `Game` (frozen) dataclasses.
-- `loader.py` — `DataSettings` → source selection/fallback → `Database`.
-- `ai.py` — `NeuralNetwork`, training orchestration, model persistence.
-- `reports.py` — rich tables; `cli.py` — argparse entry point (`vopt`).
-- `constants.py` — worksheet layout (1-based rows/columns), game rules,
-  training config. When the spreadsheet structure changes, change it here
-  and extend the test fixture to match.
+- `snapshot.py` — transport contract (raw strings, row-aligned, worksheet row
+  kept for write-backs) + `fingerprint()` (hash of what training sees).
+- `sources/` — sheets / xlsx / JSON-cache, interchangeable and identical on
+  identical data.
+- `database.py` — the **only** parsing site; malformed cells degrade loudly.
+- `ai.py` — `ArtificialIntelligence.train()` is pure (no file I/O), returns
+  `TrainingResult`; `Predictor` handles all inference; `resolve_model` maps
+  deployed/latest/path references.
+- `runs.py` — the layout contract: run ids, `RunPaths`, manifests,
+  `previous_manifest`, changelog prepend, `latest` symlink.
+- `promotion.py` — the status-quo gate (decision table in its docstring).
+- `constants.py` — worksheet layout AND output layout; change here, and
+  extend the fixture in `tests/conftest.py` to match.
 
 ## Invariants — do not break these
 
 - **Never flatten spreadsheet columns.** The Sheets API drops trailing empty
   cells; only interior cells come back as `''`. Always fetch whole rows and
-  index columns within each row, so a blank cell can't shift later values
-  into the wrong game. This bug class corrupted data silently before.
-- **Parsing happens once, in `database.py`.** Sources canonicalise values to
-  sheet string conventions; nothing downstream touches raw cells.
-- **`score is None` means unscored.** Blank cells and the sheet's `-1`
-  sentinel both normalise to `None`; training uses `Database.scored_games`.
-- **Constructing a `Game` must not register it with players.** Only
-  `Database` populates `Player.games` — hypothetical games built for
-  inference must leave histories untouched.
-- **Player column order is sorted-by-name** and fixes the model's feature
-  vector. Changing it silently invalidates every saved model.
-- **Torch imports stay lazy** (`cli.py`, `__init__.py` `__getattr__`) so
-  data-only commands start in ~0.2 s.
+  index columns within each row.
+- **Parsing happens once, in `database.py`.**
+- **`score is None` means unscored** (blank cells and the sheet's `-1` both
+  normalise to it); training uses `Database.scored_games`.
+- **Constructing a `Game` must not register it with players** — only
+  `Database` populates `Player.games`.
+- **Models are roster-decoupled.** `roster.json` next to the weights fixes
+  the feature-column order forever; `Predictor` must never build features
+  from the live database's roster. Unknown players → prediction is `None`,
+  never a silent guess.
+- **A failed training run must leave no manifest** — manifest, changelog
+  entry, and `latest` update happen only after everything else succeeded.
+  `previous_manifest`/`find_latest_run` ignore manifest-less dirs by design.
+- **Run ids are timestamp-first** (`%Y%m%d_%H%M%S_<sha7>`) so lexical order
+  is chronological — previous-run lookup depends on it.
+- **Promotion decisions compare losses only within the same dataset
+  fingerprint** — the recency-weighted loss scales with the number of scored
+  games, so cross-dataset comparisons are meaningless (gate resets instead).
+- **Torch imports stay lazy** (`cli.py`, `__init__.py` `__getattr__`).
 
 ## Data & secrets
 
 - Google service-account key: `.config/*.json` — gitignored, **never commit
   credentials**. Resolved from `--credentials`, then
   `$GOOGLE_APPLICATION_CREDENTIALS`, then a single `.config/*.json` glob.
-- `Inventory - Board Games.xlsx` contains real people's names — gitignored,
-  keep it that way. Tests use a sanitized generated fixture instead.
+- `data/` (xlsx with real people's names) and `output/` (models, changelog)
+  are gitignored — keep them that way. Tests use a generated fixture.
 - Writes to the live sheet happen only in `SheetsSource.save_anomalies`,
   behind the explicit `--write` flag. Keep destructive operations opt-in.
 
 ## Testing
 
-`task test`. The fixture in `tests/conftest.py` generates a small xlsx on the
-fly containing every edge case the live sheet has produced: mid-column blank
-scores, `-1` scores, an Overlap weight row with an empty cell, `N/A` players,
-overnight durations. When you fix a data bug, add its shape to the fixture
-first so the fix is pinned by a test.
-
-## Models
-
-Saved to `models/` (gitignored) as `neuralnetwork-<loss>.pt` with a
-loss-distribution plot alongside; `--model latest` resolves the newest by
-mtime. Models are tied to the player-roster size they were trained with —
-after new players join, old models fail to load with a clear message and a
-retrain is required. Reproducibility: `--seed` with `--workers 1` (default).
+`task test` (pytest, also run in CI on push/PR to master). The fixture in
+`tests/conftest.py` generates a small xlsx on the fly containing every edge
+case the live sheet has produced: mid-column blank scores, `-1` scores, an
+Overlap weight row with an empty cell, `N/A` players, overnight durations.
+When you fix a data bug, add its shape to the fixture first. Run-tracking
+tests use `tmp_path` and monkeypatch `constants.OUTPUT_DIR` — never write to
+the real `output/` from tests.
