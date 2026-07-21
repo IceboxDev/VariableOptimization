@@ -24,6 +24,7 @@ task train BEST_OF=100 NOTE="why"          # tracked run -> output/runs/<run_id>
 task changelog                             # newest changelog entries
 task preview MODEL=deployed                # games by year (+predictions with MODEL)
 task eval MIN_GAMES=3 YEAR=2025            # rank players (variables use UNDERSCORES)
+task rank -- --write                       # model-derived strengths -> sheet BE/BF (dry-run without --write)
 task anomalies -- --write                  # outlier flags -> live sheet (dry-run without --write)
 task refresh                               # force-refresh snapshot cache
 task clean-output                          # DESTRUCTIVE, prompts — wipes runs+changelog
@@ -82,8 +83,11 @@ Run tracking sits beside it: **cli.run_train → runs.py (layout) + promotion.py
   `$GOOGLE_APPLICATION_CREDENTIALS`, then a single `.config/*.json` glob.
 - `data/` (xlsx with real people's names) and `output/` (models, changelog)
   are gitignored — keep them that way. Tests use a generated fixture.
-- Writes to the live sheet happen only in `SheetsSource.save_anomalies`,
-  behind the explicit `--write` flag. Keep destructive operations opt-in.
+- Writes to the live sheet happen only in `SheetsSource.save_anomalies` and
+  `SheetsSource.save_rankings`, behind explicit `--write` flags. Keep
+  destructive operations opt-in. The rankings block (BE/BF) is write-only —
+  never read player strengths back from the sheet; they are derived from the
+  model by `vopt rank`.
 
 ## Testing
 

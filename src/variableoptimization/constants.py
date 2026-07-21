@@ -29,6 +29,12 @@ COL_ANOMALY: Final[int] = 5         # E
 COL_PLAYERS_FIRST: Final[int] = 9   # I
 COL_PLAYERS_LAST: Final[int] = 22   # V
 
+# Player-strength ranking block (write-only: derived from the trained model
+# by `vopt rank --write`, never read back).
+RANKINGS_FIRST_ROW: Final[int] = 3
+COL_RANKING_NAME: Final[int] = 57   # BE
+COL_RANKING_VALUE: Final[int] = 58  # BF
+
 SHEET_MAX_ROW: Final[int] = 1000
 
 # --- Cell value conventions -------------------------------------------------

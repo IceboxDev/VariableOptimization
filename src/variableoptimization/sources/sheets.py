@@ -103,3 +103,22 @@ class SheetsSource:
         )
         self.worksheet.update(values=values, range_name=cell_range)
         log.info("Wrote anomaly flags to %s (%d rows)", cell_range, len(values))
+
+    def save_rankings(self, rankings: list[tuple[str, float]]) -> None:
+        """Write (player, strength) pairs into the ranking block.
+
+        The full block is overwritten down to SHEET_MAX_ROW so stale entries
+        from a previously larger roster are cleared.
+        """
+        values: list[list[str | float]] = [
+            [name, round(value, 2)] for name, value in rankings
+        ]
+        block_rows = constants.SHEET_MAX_ROW - constants.RANKINGS_FIRST_ROW + 1
+        values += [["", ""]] * (block_rows - len(values))
+
+        cell_range = (
+            f"{rowcol_to_a1(constants.RANKINGS_FIRST_ROW, constants.COL_RANKING_NAME)}"
+            f":{rowcol_to_a1(constants.SHEET_MAX_ROW, constants.COL_RANKING_VALUE)}"
+        )
+        self.worksheet.update(values=values, range_name=cell_range)
+        log.info("Wrote %d player rankings to %s", len(rankings), cell_range)

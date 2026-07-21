@@ -207,6 +207,72 @@ def evaluate_players(
     console.print(table)
 
 
+def rank_players(
+    database: Database,
+    predictor: Predictor,
+    samples: int = 500,
+    seed: int = 0,
+    team_size: int = constants.TEAM_SIZE,
+) -> list[tuple[str, float]]:
+    """Derive a per-player strength score from the trained model.
+
+    A network has no explicit per-player weight, so strength is measured by
+    probing: every player is inserted into the SAME ``samples`` random
+    companion sets (common random numbers — comparable across players and
+    low-variance) and their mean predicted team score is the strength.
+    Prints the ranking and returns (name, mean predicted points), best first.
+    """
+    pool = [
+        player for player in database.players.values() if predictor.known(player)
+    ]
+    excluded = len(database.players) - len(pool)
+    if excluded:
+        log.warning(
+            "%d player(s) unknown to the trained roster are excluded "
+            "from the ranking", excluded,
+        )
+    if len(pool) < team_size:
+        console.print(f"Need at least {team_size} rankable players.")
+        return []
+
+    generator = numpy.random.default_rng(seed)
+    columns = numpy.array([predictor.column_of(player) for player in pool])
+    companions = numpy.array([
+        generator.choice(len(pool), size=team_size - 1, replace=False)
+        for _ in range(samples)
+    ])
+    base = numpy.zeros((samples, len(predictor.roster)), dtype=numpy.float32)
+    rows = numpy.repeat(numpy.arange(samples), team_size - 1)
+    base[rows, columns[companions.ravel()]] = 1.0
+
+    rankings = []
+    for index, player in enumerate(pool):
+        features = base.copy()
+        features[:, columns[index]] = 1.0
+        predictions = predictor.infer_features(features)
+        # Companion sets that already contain the player would score a
+        # 4-player team — drop them from their own average.
+        valid = ~(companions == index).any(axis=1)
+        if not valid.any():
+            valid = numpy.ones(samples, dtype=bool)
+        rankings.append((player.name, float(predictions[valid].mean())))
+    rankings.sort(key=lambda item: item[1], reverse=True)
+
+    table = Table(
+        title=f"Player strength (mean predicted score over {samples} "
+        f"shared random teams)",
+        box=box.SIMPLE_HEAVY,
+    )
+    table.add_column("#", justify="right", style="bold")
+    table.add_column("Player")
+    table.add_column("Strength", justify="right")
+    for position, (name, value) in enumerate(rankings, start=1):
+        table.add_row(str(position), name, f"{value:.2f}")
+    console.print(table)
+
+    return rankings
+
+
 def find_anomalies(
     database: Database,
     predictor: Predictor,

@@ -47,6 +47,16 @@ tasks:
         {{if .YEAR}}--year {{.YEAR}}{{end}}
         {{.CLI_ARGS}}
 
+  rank:
+    desc: Derive player strengths from a model; dry-run by default (task rank -- --write).
+    cmds:
+      - >
+        uv run vopt rank
+        --model "{{.MODEL | default "deployed"}}"
+        {{if .SAMPLES}}--samples {{.SAMPLES}}{{end}}
+        {{if .SEED}}--seed {{.SEED}}{{end}}
+        {{.CLI_ARGS}}
+
   anomalies:
     desc: Detect statistical outliers; dry-run by default (task anomalies -- --write).
     cmds:

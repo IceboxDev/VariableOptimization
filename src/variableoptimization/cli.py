@@ -89,6 +89,17 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--min-games", type=int, default=None)
     evaluate.add_argument("--year", type=int, default=None)
 
+    rank = commands.add_parser(
+        "rank", help="derive player strengths from a model; dry-run unless --write"
+    )
+    rank.add_argument("--model", default="deployed")
+    rank.add_argument("--samples", type=int, default=500, help="shared random teams per player")
+    rank.add_argument("--seed", type=int, default=0, help="companion-set sampling seed")
+    rank.add_argument(
+        "--write", action="store_true",
+        help="write the ranking into the sheet's BE/BF block",
+    )
+
     anomalies = commands.add_parser(
         "mark-anomalies", help="detect statistical outliers; dry-run unless --write"
     )
@@ -264,6 +275,23 @@ def run_command(args: argparse.Namespace, settings: DataSettings) -> int:
         reports.evaluate_players(
             database, predictor, min_games=args.min_games, year=args.year
         )
+        return 0
+
+    if args.command == "rank":
+        predictor = Predictor.load(resolve_model(args.model, output_dir))
+        rankings = reports.rank_players(
+            database, predictor, samples=args.samples, seed=args.seed
+        )
+        if not rankings:
+            return 1
+        if args.write:
+            from .sources import SheetsSource
+
+            source = SheetsSource(resolve_credentials(settings.credentials))
+            source.save_rankings(rankings)
+            print(f"Wrote {len(rankings)} player strengths to the sheet.")
+        else:
+            print("Dry run — pass --write to update the sheet.")
         return 0
 
     if args.command == "mark-anomalies":
