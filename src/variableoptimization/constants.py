@@ -11,7 +11,7 @@ from typing import Final
 # --- Data sources -----------------------------------------------------------
 SPREADSHEET_NAME: Final[str] = "Inventory - Board Games"
 WORKSHEET_NAME: Final[str] = "Quiz Match History"
-XLSX_DEFAULT_PATH: Final[str] = "Inventory - Board Games.xlsx"
+XLSX_DEFAULT_PATH: Final[str] = "data/board-games.xlsx"
 
 CREDENTIALS_ENV_VAR: Final[str] = "GOOGLE_APPLICATION_CREDENTIALS"
 CREDENTIALS_GLOB: Final[str] = ".config/*.json"
@@ -54,5 +54,12 @@ EVAL_BATCH_SIZE: Final[int] = 16_384
 
 # --- Training ---------------------------------------------------------------
 TRAINING_SET_SIZE: Final[float] = 0.8
-MODELS_DIR: Final[str] = "models"
-LEGACY_MODELS_DIR: Final[str] = "NeuralNetwork"
+
+# --- Output layout (ntire-eol-style run tracking) ---------------------------
+OUTPUT_DIR: Final[str] = "output"
+RUNS_DIRNAME: Final[str] = "runs"
+LATEST_LINK_NAME: Final[str] = "latest"
+CHANGELOG_FILENAME: Final[str] = "CHANGELOG.md"
+DEPLOYED_MODEL_FILENAME: Final[str] = "model.pt"
+DEPLOYED_ROSTER_FILENAME: Final[str] = "roster.json"
+STATUS_QUO_FILENAME: Final[str] = "status_quo.json"

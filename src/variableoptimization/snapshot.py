@@ -7,7 +7,11 @@ happens once, in :mod:`variableoptimization.database`.
 """
 
 import dataclasses
+import hashlib
+import json
 from typing import Any, Self
+
+from . import constants
 
 SCHEMA_VERSION = 2
 
@@ -62,3 +66,36 @@ class Snapshot:
                 for record in data["weights"]
             ),
         )
+
+
+def fingerprint(snapshot: Snapshot) -> str:
+    """Content hash (16 hex chars) over what training actually sees.
+
+    Covers the sorted roster, the scored game records, and the weights —
+    deliberately excluding unscored rows, so upcoming games don't change the
+    fingerprint and falsely reset the promotion baseline.
+    """
+    def is_scored(value: str) -> bool:
+        try:
+            return float(value) >= 0
+        except ValueError:
+            return False
+
+    roster = sorted({
+        name
+        for record in snapshot.games
+        for name in record.players
+        if name != constants.NO_PLAYER
+    })
+    scored = [
+        dataclasses.asdict(record)
+        for record in snapshot.games
+        if record.score and is_scored(record.score)
+    ]
+    weights = [dataclasses.asdict(record) for record in snapshot.weights]
+    payload = json.dumps(
+        {"roster": roster, "scored": scored, "weights": weights},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
