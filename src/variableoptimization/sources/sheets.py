@@ -1,9 +1,8 @@
 """Google Sheets data source.
 
-Fetches whole rows (one range for the match history, one for the weights
-block) and indexes columns *within each row*, so blank cells can never shift
-values between rows — the Sheets API only drops trailing cells of a row, never
-interior ones.
+Fetches the match history as whole rows and indexes columns *within each
+row*, so blank cells can never shift values between rows — the Sheets API
+only drops trailing cells of a row, never interior ones.
 """
 
 import logging
@@ -13,17 +12,13 @@ import gspread
 from gspread.utils import rowcol_to_a1
 
 from .. import constants
-from ..snapshot import GameRecord, Snapshot, WeightRecord
+from ..snapshot import GameRecord, Snapshot
 
 log = logging.getLogger(__name__)
 
 GAMES_RANGE = (
     f"{rowcol_to_a1(constants.GAMES_FIRST_ROW, constants.COL_DATE)}"
     f":{rowcol_to_a1(constants.SHEET_MAX_ROW, constants.COL_PLAYERS_LAST)}"
-)
-WEIGHTS_RANGE = (
-    f"{rowcol_to_a1(constants.WEIGHTS_FIRST_ROW, constants.COL_WEIGHT_NAME)}"
-    f":{rowcol_to_a1(constants.SHEET_MAX_ROW, constants.COL_WEIGHT_VALUE)}"
 )
 
 
@@ -59,9 +54,7 @@ class SheetsSource:
         return self._worksheet
 
     def fetch(self) -> Snapshot:
-        game_rows, weight_rows = self.worksheet.batch_get(
-            [GAMES_RANGE, WEIGHTS_RANGE]
-        )
+        [game_rows] = self.worksheet.batch_get([GAMES_RANGE])
 
         games = []
         for offset, row in enumerate(game_rows):
@@ -87,14 +80,8 @@ class SheetsSource:
                 )
             )
 
-        weights = []
-        for row in weight_rows:
-            name = _cell(row, 0)
-            if name:
-                weights.append(WeightRecord(name=name, weight=_cell(row, 1)))
-
-        log.debug("Fetched %d game rows, %d weight rows", len(games), len(weights))
-        return Snapshot(games=tuple(games), weights=tuple(weights))
+        log.debug("Fetched %d game rows", len(games))
+        return Snapshot(games=tuple(games))
 
     def save_anomalies(self, flags: dict[int, bool]) -> None:
         """Write the anomaly column for the given worksheet rows.

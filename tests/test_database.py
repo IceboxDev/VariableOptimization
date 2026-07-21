@@ -4,21 +4,12 @@ import datetime
 
 from variableoptimization.database import Database
 from variableoptimization.domain import Game
-from variableoptimization.snapshot import GameRecord, Snapshot, WeightRecord
+from variableoptimization.snapshot import GameRecord, Snapshot
 
 
-def test_players_and_weights(fixture_snapshot):
+def test_players_exclude_the_na_placeholder(fixture_snapshot):
     database = Database(fixture_snapshot)
     assert sorted(database.players) == ["Alice", "Bob", "Carol", "Dave"]  # no N/A
-    assert database.players["Alice"].weight == 0.5
-    assert database.players["Dave"].weight == 0.0  # absent from weights block
-
-
-def test_missing_overlap_defaults_to_zero(fixture_snapshot, caplog):
-    with caplog.at_level("WARNING"):
-        database = Database(fixture_snapshot)
-    assert database.overlap == 0.0
-    assert any("Overlap" in message for message in caplog.messages)
 
 
 def test_scores_and_sentinels(fixture_snapshot):
@@ -71,7 +62,6 @@ def test_bad_cells_degrade_without_crashing(caplog):
             GameRecord(row=2, date="not-a-date", duration="", score="1", anomaly="", players=("A",)),
             GameRecord(row=3, date="01/05/24", duration="junk", score="abc", anomaly="", players=("A",)),
         ),
-        weights=(WeightRecord(name="Overlap", weight="0.1"),),
     )
     with caplog.at_level("WARNING"):
         database = Database(snapshot)
@@ -79,5 +69,4 @@ def test_bad_cells_degrade_without_crashing(caplog):
     assert len(database.games) == 1  # bad date skipped with a warning
     assert database.games[0].score is None  # bad score -> unscored
     assert database.games[0].duration is None  # bad duration -> None
-    assert database.overlap == 0.1
     assert len(caplog.messages) == 3

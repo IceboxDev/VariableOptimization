@@ -2,8 +2,7 @@
 
 This is the only place raw cell strings become dates, scores, and players.
 Malformed cells are logged and degraded (bad score -> unscored, bad duration
--> None); a malformed date skips the row with a warning. A missing Overlap
-weight defaults to 0.0 instead of crashing.
+-> None); a malformed date skips the row with a warning.
 """
 
 import datetime
@@ -56,38 +55,15 @@ class Database:
         self.snapshot = snapshot
         self.players: dict[str, Player] = {}
         self.games: list[Game] = []
-        self.overlap = 0.0
 
-        weights = self._parse_weights(snapshot)
-        self._build_players(snapshot, weights)
+        self._build_players(snapshot)
         self._build_games(snapshot)
 
     @property
     def scored_games(self) -> list[Game]:
         return [game for game in self.games if game.has_score()]
 
-    def _parse_weights(self, snapshot: Snapshot) -> dict[str, float]:
-        weights: dict[str, float] = {}
-        for record in snapshot.weights:
-            try:
-                weights[record.name] = float(record.weight)
-            except ValueError:
-                log.warning(
-                    "Weight for %r is %r — defaulting to 0.0",
-                    record.name, record.weight,
-                )
-                weights[record.name] = 0.0
-
-        if constants.OVERLAP_KEY in weights:
-            self.overlap = weights.pop(constants.OVERLAP_KEY)
-        else:
-            log.warning(
-                "No %r entry in the weights block — overlap defaults to 0.0",
-                constants.OVERLAP_KEY,
-            )
-        return weights
-
-    def _build_players(self, snapshot: Snapshot, weights: dict[str, float]) -> None:
+    def _build_players(self, snapshot: Snapshot) -> None:
         names = sorted({
             name
             for record in snapshot.games
@@ -96,7 +72,7 @@ class Database:
         })
         # Sorted order is load-bearing: it fixes the feature-vector column
         # order the models are trained and inferred with.
-        self.players = {name: Player(name, weights.get(name, 0.0)) for name in names}
+        self.players = {name: Player(name) for name in names}
 
     def _build_games(self, snapshot: Snapshot) -> None:
         for record in snapshot.games:

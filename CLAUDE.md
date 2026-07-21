@@ -89,8 +89,8 @@ Run tracking sits beside it: **cli.run_train → runs.py (layout) + promotion.py
 
 `task test` (pytest, also run in CI on push/PR to master). The fixture in
 `tests/conftest.py` generates a small xlsx on the fly containing every edge
-case the live sheet has produced: mid-column blank scores, `-1` scores, an
-Overlap weight row with an empty cell, `N/A` players, overnight durations.
+case the live sheet has produced: mid-column blank scores, `-1` scores,
+`N/A` players, overnight durations.
 When you fix a data bug, add its shape to the fixture first. Run-tracking
 tests use `tmp_path` and monkeypatch `constants.OUTPUT_DIR` — never write to
 the real `output/` from tests.

@@ -29,10 +29,6 @@ COL_ANOMALY: Final[int] = 5         # E
 COL_PLAYERS_FIRST: Final[int] = 9   # I
 COL_PLAYERS_LAST: Final[int] = 22   # V
 
-WEIGHTS_FIRST_ROW: Final[int] = 3
-COL_WEIGHT_NAME: Final[int] = 57    # BE
-COL_WEIGHT_VALUE: Final[int] = 58   # BF
-
 SHEET_MAX_ROW: Final[int] = 1000
 
 # --- Cell value conventions -------------------------------------------------
@@ -40,7 +36,6 @@ DATE_FORMAT: Final[str] = "%m/%d/%y"
 TIME_FORMAT: Final[str] = "%H:%M"
 DURATION_SEPARATOR: Final[str] = " - "
 NO_PLAYER: Final[str] = "N/A"
-OVERLAP_KEY: Final[str] = "Overlap"
 TRUE_VALUES: Final[frozenset[str]] = frozenset({"TRUE", "1", "YES", "Y"})
 
 # --- Game rules -------------------------------------------------------------

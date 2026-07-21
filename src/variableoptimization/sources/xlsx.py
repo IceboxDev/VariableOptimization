@@ -12,7 +12,7 @@ from pathlib import Path
 import openpyxl
 
 from .. import constants
-from ..snapshot import GameRecord, Snapshot, WeightRecord
+from ..snapshot import GameRecord, Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -80,23 +80,8 @@ class XlsxSource:
                     )
                 )
 
-            weights = []
-            for row in range(constants.WEIGHTS_FIRST_ROW, sheet.max_row + 1):
-                name = _canonical(sheet.cell(row, constants.COL_WEIGHT_NAME).value)
-                if name:
-                    weights.append(
-                        WeightRecord(
-                            name=name,
-                            weight=_canonical(
-                                sheet.cell(row, constants.COL_WEIGHT_VALUE).value
-                            ),
-                        )
-                    )
         finally:
             workbook.close()
 
-        log.debug(
-            "Read %d game rows, %d weight rows from %s",
-            len(games), len(weights), self._path,
-        )
-        return Snapshot(games=tuple(games), weights=tuple(weights))
+        log.debug("Read %d game rows from %s", len(games), self._path)
+        return Snapshot(games=tuple(games))

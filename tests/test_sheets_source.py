@@ -6,7 +6,7 @@ cells of each row are dropped, interior blanks come back as ''.
 
 from variableoptimization import constants
 from variableoptimization.sources import SheetsSource
-from variableoptimization.sources.sheets import GAMES_RANGE, WEIGHTS_RANGE
+from variableoptimization.sources.sheets import GAMES_RANGE
 
 
 def make_game_row(date="", duration="", score="", anomaly="", players=()):
@@ -23,8 +23,8 @@ def make_game_row(date="", duration="", score="", anomaly="", players=()):
 
 
 class FakeWorksheet:
-    def __init__(self, game_rows, weight_rows):
-        self._payload = {GAMES_RANGE: game_rows, WEIGHTS_RANGE: weight_rows}
+    def __init__(self, game_rows):
+        self._payload = {GAMES_RANGE: game_rows}
         self.updates = []
 
     def batch_get(self, ranges):
@@ -34,10 +34,8 @@ class FakeWorksheet:
         self.updates.append((range_name, values))
 
 
-def make_source(game_rows, weight_rows=()):
-    return SheetsSource(
-        "unused.json", worksheet=FakeWorksheet(list(game_rows), list(weight_rows))
-    )
+def make_source(game_rows):
+    return SheetsSource("unused.json", worksheet=FakeWorksheet(list(game_rows)))
 
 
 def test_interior_blanks_stay_row_aligned():
@@ -52,16 +50,6 @@ def test_interior_blanks_stay_row_aligned():
 
     assert [record.score for record in snapshot.games] == ["40", "", "33"]
     assert [record.row for record in snapshot.games] == [2, 3, 4]
-
-
-def test_ragged_weight_rows():
-    source = make_source(
-        [make_game_row(date="01/05/24", players=("Alice",))],
-        weight_rows=[["Alice", "0.5"], ["Overlap"]],  # Overlap weight cell empty
-    )
-    snapshot = source.fetch()
-    assert snapshot.weights[-1].name == "Overlap"
-    assert snapshot.weights[-1].weight == ""
 
 
 def test_fully_empty_rows_are_skipped():

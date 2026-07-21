@@ -13,7 +13,7 @@ from typing import Any, Self
 
 from . import constants
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -29,22 +29,12 @@ class GameRecord:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class WeightRecord:
-    """One (name, weight) row of the weights block, unparsed."""
-
-    name: str
-    weight: str
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
 class Snapshot:
     games: tuple[GameRecord, ...]
-    weights: tuple[WeightRecord, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "games": [dataclasses.asdict(record) for record in self.games],
-            "weights": [dataclasses.asdict(record) for record in self.weights],
         }
 
     @classmethod
@@ -61,20 +51,17 @@ class Snapshot:
                 )
                 for record in data["games"]
             ),
-            weights=tuple(
-                WeightRecord(name=str(record["name"]), weight=str(record["weight"]))
-                for record in data["weights"]
-            ),
         )
 
 
 def fingerprint(snapshot: Snapshot) -> str:
     """Content hash (16 hex chars) over what training actually sees.
 
-    Covers the sorted roster, the scored game records, and the weights —
-    deliberately excluding unscored rows, so upcoming games don't change the
-    fingerprint and falsely reset the promotion baseline.
+    Covers the sorted roster and the scored game records — deliberately
+    excluding unscored rows, so upcoming games don't change the fingerprint
+    and falsely reset the promotion baseline.
     """
+
     def is_scored(value: str) -> bool:
         try:
             return float(value) >= 0
@@ -92,9 +79,8 @@ def fingerprint(snapshot: Snapshot) -> str:
         for record in snapshot.games
         if record.score and is_scored(record.score)
     ]
-    weights = [dataclasses.asdict(record) for record in snapshot.weights]
     payload = json.dumps(
-        {"roster": roster, "scored": scored, "weights": weights},
+        {"roster": roster, "scored": scored},
         sort_keys=True,
         separators=(",", ":"),
     )

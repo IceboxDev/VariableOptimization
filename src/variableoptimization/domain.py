@@ -11,10 +11,9 @@ import datetime
 
 @dataclasses.dataclass(eq=False)
 class Player:
-    """A pub-quiz participant. Identity is the name; weight is a skill prior."""
+    """A pub-quiz participant. Identity is the name."""
 
     name: str
-    weight: float = 0.0
     games: set["Game"] = dataclasses.field(default_factory=set, repr=False)
 
     def __eq__(self, other: object) -> bool:

@@ -38,8 +38,3 @@ def test_values_are_canonical_strings(fixture_snapshot):
     assert games[0].anomaly == "FALSE"
     assert games[5].anomaly == ""
     assert games[3].players == ("Alice", "Bob", "N/A")  # raw, unfiltered
-
-
-def test_weights_include_empty_overlap(fixture_snapshot):
-    weights = {record.name: record.weight for record in fixture_snapshot.weights}
-    assert weights == {"Alice": "0.5", "Bob": "0.25", "Overlap": ""}

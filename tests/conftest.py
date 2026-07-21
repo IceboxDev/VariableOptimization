@@ -1,6 +1,6 @@
 """Shared fixtures: a small sanitized xlsx clone exercising every edge case
-the live sheet has produced — mid-column blanks, the -1 score sentinel, an
-Overlap row with no weight, N/A players, and overnight game durations."""
+the live sheet has produced — mid-column blanks, the -1 score sentinel,
+N/A players, and overnight game durations."""
 
 import datetime
 from pathlib import Path
@@ -22,13 +22,6 @@ GAMES = [
     (datetime.date(2024, 2, 9), None, None, None, ["Alice", "Carol"]),  # upcoming game
 ]
 
-WEIGHTS = [
-    ("Alice", 0.5),
-    ("Bob", 0.25),
-    ("Overlap", None),  # the live-sheet bug: Overlap row with an empty weight
-]
-
-
 @pytest.fixture(scope="session")
 def fixture_xlsx(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("data") / "fixture.xlsx"
@@ -47,12 +40,6 @@ def fixture_xlsx(tmp_path_factory) -> Path:
             sheet.cell(row, constants.COL_ANOMALY, anomaly)
         for player_offset, player in enumerate(players):
             sheet.cell(row, constants.COL_PLAYERS_FIRST + player_offset, player)
-
-    for offset, (name, weight) in enumerate(WEIGHTS):
-        row = constants.WEIGHTS_FIRST_ROW + offset
-        sheet.cell(row, constants.COL_WEIGHT_NAME, name)
-        if weight is not None:
-            sheet.cell(row, constants.COL_WEIGHT_VALUE, weight)
 
     workbook.save(path)
     return path
