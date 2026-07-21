@@ -166,12 +166,11 @@ cython_debug/
 .config/
 
 # Personal data — local spreadsheet clones
+data/
 *.xlsx
 
 # Data cache
 .cache/
-.pubquiz_database.cache
 
-# Trained model artifacts
-models/
-NeuralNetwork/
+# Training runs, deployed model, changelog
+output/
