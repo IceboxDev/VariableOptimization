@@ -43,6 +43,8 @@ def test_first_run_seeds_the_full_structure(fixture_xlsx, output_dir):
     assert manifest["delta_vs_prev"] is None
     assert manifest["note"] == "first"
     assert manifest["dataset"]["players"] == 4
+    assert manifest["dataset"]["excluded_anomalies"] == 1  # the fixture's TRUE row
+    assert "1 anomalies excluded" in (output_dir / "CHANGELOG.md").read_text()
 
     assert (runs_root / "latest").resolve() == run_dir
     assert (output_dir / "model.pt").is_file()

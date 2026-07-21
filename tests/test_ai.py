@@ -21,14 +21,23 @@ def test_validation_mask_all_zero_participation():
     assert not mask.any()
 
 
-def test_matrices_use_scored_games_only(fixture_snapshot):
+def test_matrices_exclude_anomalies_by_default(fixture_snapshot):
     database = Database(fixture_snapshot)
     ai = ArtificialIntelligence(database)
 
-    # 3 scored games, 4 players; training + validation partition the whole set.
-    assert tuple(ai.complete_x.shape) == (3, 4)
-    assert len(ai.train_x) + len(ai.validate_x) == 3
+    # 3 scored games, one flagged as anomaly -> 2 training rows, 4 players.
+    assert tuple(ai.complete_x.shape) == (2, 4)
+    assert ai.excluded_anomalies == 1
+    assert len(ai.train_x) + len(ai.validate_x) == 2
     assert ai.complete_y.max() <= 1.0  # scores are normalised
+
+
+def test_include_anomalies_escape_hatch(fixture_snapshot):
+    database = Database(fixture_snapshot)
+    ai = ArtificialIntelligence(database, include_anomalies=True)
+
+    assert tuple(ai.complete_x.shape) == (3, 4)
+    assert ai.excluded_anomalies == 0
 
 
 def test_no_scored_games_is_a_clear_error(fixture_snapshot):

@@ -58,12 +58,13 @@ tasks:
         {{.CLI_ARGS}}
 
   anomalies:
-    desc: Detect statistical outliers; dry-run by default (task anomalies -- --write).
+    desc: Detect statistical outliers; dry-run by default (task anomalies TOP=5 -- --write).
     cmds:
       - >
         uv run vopt mark-anomalies
         --model "{{.MODEL | default "deployed"}}"
         {{if .THRESHOLD}}--threshold {{.THRESHOLD}}{{end}}
+        {{if .TOP}}--top {{.TOP}}{{end}}
         {{.CLI_ARGS}}
 
   changelog:

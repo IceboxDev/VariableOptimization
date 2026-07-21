@@ -277,12 +277,15 @@ def find_anomalies(
     database: Database,
     predictor: Predictor,
     threshold: float = 2.0,
+    top: int | None = None,
 ) -> dict[int, bool]:
     """Flag scored games whose prediction residual is a statistical outlier.
 
-    Prints a report and returns {worksheet row: is_anomaly} for every game
-    with a known row — ready for SheetsSource.save_anomalies. Unscored games
-    and games outside the trained roster are always False.
+    ``top`` keeps only the N most extreme outliers (by |z|) — the rest are
+    reported as usual games. Prints a report and returns
+    {worksheet row: is_anomaly} for every game with a known row — ready for
+    SheetsSource.save_anomalies. Unscored games and games outside the
+    trained roster are always False.
     """
     scored = database.scored_games
     predicted = [
@@ -309,19 +312,27 @@ def find_anomalies(
 
     deviation = residuals.std()
     z_scores = (residuals - residuals.mean()) / deviation if deviation else residuals * 0.0
-    flagged = {
-        game: (z, prediction)
-        for (game, prediction), z in zip(predicted, z_scores)
-        if abs(z) >= threshold
-    }
+    outliers = sorted(
+        (
+            (game, z, prediction)
+            for (game, prediction), z in zip(predicted, z_scores)
+            if abs(z) >= threshold
+        ),
+        key=lambda item: -abs(item[1]),
+    )
+    if top is not None:
+        outliers = outliers[:top]
+    flagged = {game: (z, prediction) for game, z, prediction in outliers}
 
+    limit = f", top {top}" if top is not None else ""
     table = Table(
-        title=f"Anomalies (|z| ≥ {threshold}, {len(flagged)}/{len(predicted)} games)",
+        title=f"Anomalies (|z| ≥ {threshold}{limit}, "
+        f"{len(flagged)}/{len(predicted)} games)",
         box=box.SIMPLE_HEAVY,
     )
     for header in ("Date", "Players", "Actual", "Predicted", "z", "Was"):
         table.add_column(header, justify="right" if header not in ("Date", "Players") else "left")
-    for game, (z, prediction) in sorted(flagged.items(), key=lambda item: -abs(item[1][0])):
+    for game, (z, prediction) in flagged.items():
         table.add_row(
             game.date.isoformat() if game.date else "-",
             ", ".join(player.name for player in game.players),

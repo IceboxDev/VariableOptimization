@@ -21,14 +21,14 @@ pass `--credentials`.
 Everything runs through [Task](https://taskfile.dev):
 
 ```bash
-task train BEST_OF=100 NOTE="why this run"   # tracked training run
+task train BEST_OF=100 NOTE="why this run"   # tracked run (anomaly-flagged games excluded)
 task changelog                               # newest changelog entries
 task preview MODEL=deployed                  # games by year, with predictions
 task eval MIN_GAMES=3 YEAR=2025              # rank players by predicted team scores
 task rank                                    # per-player strength from the model (dry run)
 task rank -- --write                         # ...and write it to the sheet's BE/BF block
 task anomalies                               # outlier report (dry run)
-task anomalies -- --write                    # ...and write flags back to the sheet
+task anomalies TOP=5 -- --write              # write the 5 most extreme flags to the sheet
 task refresh                                 # force-refresh the snapshot cache
 task test                                    # run the test suite
 ```

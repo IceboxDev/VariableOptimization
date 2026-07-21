@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--epochs", type=int, default=1000, help="epochs per candidate")
     train.add_argument("--note", default=None, help="changelog note for this run")
     train.add_argument("--suffix", default=None, help="run-id suffix (e.g. 'demo')")
+    train.add_argument(
+        "--include-anomalies",
+        action="store_true",
+        help="train on anomaly-flagged games too (excluded by default)",
+    )
 
     preview = commands.add_parser("preview", help="pretty-print all games by year")
     preview.add_argument(
@@ -105,6 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomalies.add_argument("--model", default="deployed")
     anomalies.add_argument("--threshold", type=float, default=2.0, help="z-score cutoff")
+    anomalies.add_argument(
+        "--top", type=int, default=None,
+        help="flag only the N most extreme outliers",
+    )
     anomalies.add_argument(
         "--write", action="store_true", help="write flags back to the Google Sheet"
     )
@@ -165,12 +174,16 @@ def run_train(args: argparse.Namespace, settings: DataSettings) -> int:
             "workers": args.workers,
             "epochs": args.epochs,
             "source": settings.source,
+            "include_anomalies": args.include_anomalies,
         }
         with open(paths.config_path, "w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2)
             handle.write("\n")
 
-        result = ArtificialIntelligence(database).train(
+        intelligence = ArtificialIntelligence(
+            database, include_anomalies=args.include_anomalies
+        )
+        result = intelligence.train(
             best_of=args.best_of,
             seed=args.seed,
             workers=args.workers,
@@ -216,6 +229,7 @@ def run_train(args: argparse.Namespace, settings: DataSettings) -> int:
                 "fingerprint": fingerprint,
                 "games": len(database.games),
                 "scored_games": len(database.scored_games),
+                "excluded_anomalies": intelligence.excluded_anomalies,
                 "players": len(database.players),
             },
             "config": config,
@@ -296,7 +310,9 @@ def run_command(args: argparse.Namespace, settings: DataSettings) -> int:
 
     if args.command == "mark-anomalies":
         predictor = Predictor.load(resolve_model(args.model, output_dir))
-        flags = reports.find_anomalies(database, predictor, threshold=args.threshold)
+        flags = reports.find_anomalies(
+            database, predictor, threshold=args.threshold, top=args.top
+        )
         if args.write:
             from .sources import SheetsSource
 

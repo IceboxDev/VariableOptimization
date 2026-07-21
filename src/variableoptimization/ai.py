@@ -250,12 +250,25 @@ def resolve_model(reference: str | None, output_dir: Path) -> Path:
 
 
 class ArtificialIntelligence:
-    def __init__(self, database: Database, device: torch.device | None = None) -> None:
+    def __init__(
+        self,
+        database: Database,
+        device: torch.device | None = None,
+        include_anomalies: bool = False,
+    ) -> None:
         self.database = database
         self.device = device or get_device()
         self.players = list(database.players.values())
 
         scored = database.scored_games
+        if not include_anomalies:
+            scored = [game for game in scored if not game.is_anomaly]
+        self.excluded_anomalies = len(database.scored_games) - len(scored)
+        if self.excluded_anomalies:
+            log.info(
+                "Excluding %d anomaly-flagged game(s) from training",
+                self.excluded_anomalies,
+            )
         if not scored:
             raise ValueError("No scored games in the database — nothing to learn from.")
 
@@ -268,10 +281,9 @@ class ArtificialIntelligence:
             dtype=numpy.float32,
         )
 
-        # Per game: the scored-game count of its least experienced player.
-        experience = numpy.array(
-            [len(player.scored_games) for player in self.players]
-        )
+        # Per game: the scored-game count of its least experienced player,
+        # counted within the same (anomaly-filtered) training universe.
+        experience = membership.sum(axis=0)
         min_participation = numpy.array([
             experience[row].min() if row.any() else 0 for row in membership
         ])

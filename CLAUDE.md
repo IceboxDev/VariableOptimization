@@ -25,7 +25,7 @@ task changelog                             # newest changelog entries
 task preview MODEL=deployed                # games by year (+predictions with MODEL)
 task eval MIN_GAMES=3 YEAR=2025            # rank players (variables use UNDERSCORES)
 task rank -- --write                       # model-derived strengths -> sheet BE/BF (dry-run without --write)
-task anomalies -- --write                  # outlier flags -> live sheet (dry-run without --write)
+task anomalies TOP=5 -- --write            # N most extreme outlier flags -> live sheet (dry-run without --write)
 task refresh                               # force-refresh snapshot cache
 task clean-output                          # DESTRUCTIVE, prompts — wipes runs+changelog
 ```
@@ -60,6 +60,10 @@ Run tracking sits beside it: **cli.run_train → runs.py (layout) + promotion.py
 - **Parsing happens once, in `database.py`.**
 - **`score is None` means unscored** (blank cells and the sheet's `-1` both
   normalise to it); training uses `Database.scored_games`.
+- **Anomaly-flagged games are excluded from training by default**
+  (`--include-anomalies` is the escape hatch); the exclusion count is
+  recorded in the manifest and changelog. Flagging anomalies changes the
+  dataset fingerprint, so the next run legitimately resets the baseline.
 - **Constructing a `Game` must not register it with players** — only
   `Database` populates `Player.games`.
 - **Models are roster-decoupled.** `roster.json` next to the weights fixes

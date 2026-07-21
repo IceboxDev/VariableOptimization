@@ -202,6 +202,13 @@ def format_changelog_entry(manifest: dict[str, Any]) -> str:
         )
 
     dataset = manifest["dataset"]
+    excluded = dataset.get("excluded_anomalies", 0)
+    dataset_line = (
+        f"- dataset: `{dataset['fingerprint']}` — "
+        f"{dataset['scored_games']} scored games, {dataset['players']} players"
+    )
+    if excluded:
+        dataset_line += f", {excluded} anomalies excluded"
     return (
         f"## {run_id}\n"
         f"\n"
@@ -217,8 +224,7 @@ def format_changelog_entry(manifest: dict[str, Any]) -> str:
         f"**Inputs**\n"
         f"- git: `{manifest['git']['sha']}`"
         f"{' (dirty)' if manifest['git']['dirty'] else ''}\n"
-        f"- dataset: `{dataset['fingerprint']}` — "
-        f"{dataset['scored_games']} scored games, {dataset['players']} players\n"
+        f"{dataset_line}\n"
         f"\n"
         f"Artifacts: [`runs/{run_id}/`](runs/{run_id}/)\n"
         f"\n"
