@@ -29,12 +29,14 @@ task rank                                    # per-player strength from the mode
 task rank -- --write                         # ...and write it to the sheet's BE/BF block
 task anomalies                               # outlier report (dry run)
 task anomalies TOP=5 -- --write              # write the 5 most extreme flags to the sheet
-task refresh                                 # force-refresh the snapshot cache
-task test                                    # run the test suite
 ```
 
 `MODEL=` accepts `deployed` (the promoted model — default), `latest` (newest
-completed run), or an explicit path.
+completed run), or an explicit path. To bypass a fresh-but-stale cache (e.g.
+right after `--write`-ing flags), append `-- --refresh` to any command.
+
+Developer commands run directly: `uv sync`, `uv run pytest`,
+`uv run vopt --help`.
 
 ## Run tracking
 

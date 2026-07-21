@@ -17,18 +17,23 @@ ntire-eol-style: one folder per run under `output/runs/`, a newest-first
 `uv` manages the environment (Python ≥ 3.14); [Task](https://taskfile.dev)
 wraps the `vopt` CLI:
 
+The Taskfile contains END-USER commands only; developer plumbing (sync,
+tests, cache management) runs through uv directly:
+
 ```bash
-task sync                                  # uv sync
-task test                                  # pytest — run after any change
+uv sync                                    # install/update environment
+uv run pytest                              # run after any change
 task train BEST_OF=100 NOTE="why"          # tracked run -> output/runs/<run_id>/
 task changelog                             # newest changelog entries
 task preview MODEL=deployed                # games by year (+predictions with MODEL)
 task eval MIN_GAMES=3 YEAR=2025            # rank players (variables use UNDERSCORES)
 task rank -- --write                       # model-derived strengths -> sheet BE/BF (dry-run without --write)
 task anomalies TOP=5 -- --write            # N most extreme outlier flags -> live sheet (dry-run without --write)
-task refresh                               # force-refresh snapshot cache
-task clean-output                          # DESTRUCTIVE, prompts — wipes runs+changelog
+uv run vopt refresh                        # force-refresh snapshot cache (or `-- --refresh` on any task)
 ```
+
+Do not add developer tasks back to the Taskfile — the user wants it to stay
+an end-user surface.
 
 Model references: `deployed` (promoted model, default), `latest` (newest
 completed run), or an explicit path. Data source: `-- --source {auto,sheets,xlsx,cache}`.

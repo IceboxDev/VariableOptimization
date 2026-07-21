@@ -6,16 +6,6 @@ env:
   GOOGLE_APPLICATION_CREDENTIALS: ".config/personal-433622-62e046c7be64.json"
 
 tasks:
-  sync:
-    desc: Install/update the virtual environment.
-    cmds:
-      - uv sync
-
-  test:
-    desc: Run the test suite.
-    cmds:
-      - uv run pytest {{.CLI_ARGS}}
-
   train:
     desc: Tracked training run (task train BEST_OF=100 SEED=42 NOTE="why this run").
     cmds:
@@ -71,19 +61,3 @@ tasks:
     desc: Show the newest training changelog entries.
     cmds:
       - head -n 40 output/CHANGELOG.md
-
-  refresh:
-    desc: Force-refresh the snapshot cache from Google Sheets.
-    cmds:
-      - uv run vopt refresh
-
-  clean:
-    desc: Remove the snapshot cache.
-    cmds:
-      - rm -rf .cache
-
-  clean-output:
-    desc: DESTRUCTIVE — remove all runs, the deployed model, and the changelog.
-    prompt: This deletes output/ including CHANGELOG.md and the deployed model. Continue?
-    cmds:
-      - rm -rf output
