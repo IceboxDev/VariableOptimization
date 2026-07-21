@@ -314,11 +314,17 @@ class ArtificialIntelligence:
         return path
 
     def infer(self, game: Game) -> float:
+        features = numpy.array(
+            [[player in game.players for player in self.players]],
+            dtype=numpy.float32,
+        )
+        return float(self.infer_features(features)[0])
+
+    def infer_features(self, features: numpy.ndarray) -> numpy.ndarray:
+        """Predict scores for a (batch, players) participation matrix in one
+        forward pass. Column order must match ``self.players``."""
         if self.algorithm is None:
             raise RuntimeError("No model loaded — call train() or load() first.")
-        features = torch.tensor(
-            [float(player in game.players) for player in self.players],
-            dtype=torch.float32,
-            device=self.device,
-        ).reshape(1, -1)
-        return self.algorithm.infer(features).item() * constants.GAME_MAX_SCORE
+        tensor = torch.tensor(features, dtype=torch.float32, device=self.device)
+        predictions = self.algorithm.infer(tensor) * constants.GAME_MAX_SCORE
+        return predictions.cpu().numpy()

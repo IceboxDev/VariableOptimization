@@ -47,6 +47,11 @@ TRUE_VALUES: Final[frozenset[str]] = frozenset({"TRUE", "1", "YES", "Y"})
 GAME_MAX_SCORE: Final[int] = 66
 TEAM_SIZE: Final[int] = 5
 
+# Refuse player evaluations that would enumerate more teams than this —
+# C(unfiltered roster, TEAM_SIZE) runs into the billions.
+EVAL_MAX_TEAMS: Final[int] = 10_000_000
+EVAL_BATCH_SIZE: Final[int] = 16_384
+
 # --- Training ---------------------------------------------------------------
 TRAINING_SET_SIZE: Final[float] = 0.8
 MODELS_DIR: Final[str] = "models"

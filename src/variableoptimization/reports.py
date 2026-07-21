@@ -2,10 +2,11 @@
 
 import datetime
 import itertools
-import statistics
+import math
 from collections import defaultdict
 
 import numpy
+import tqdm
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -88,8 +89,15 @@ def evaluate_players(
     ai: ArtificialIntelligence,
     min_games: int | None = None,
     year: int | None = None,
+    team_size: int = constants.TEAM_SIZE,
+    max_teams: int = constants.EVAL_MAX_TEAMS,
 ) -> None:
-    """Rank players by their mean predicted score over all possible teams."""
+    """Rank players by their mean predicted score over all possible teams.
+
+    Teams are enumerated combinatorially, so the eligible roster must be
+    narrow — an unfiltered roster produces billions of teams and is refused.
+    Inference runs in batches (one forward pass per EVAL_BATCH_SIZE teams).
+    """
 
     def relevant_games(player) -> list[Game]:
         games = player.scored_games
@@ -102,18 +110,55 @@ def evaluate_players(
         for player in database.players.values()
         if min_games is None or len(relevant_games(player)) >= min_games
     ]
-    if len(eligible) < constants.TEAM_SIZE:
+    if len(eligible) < team_size:
         console.print(
             f"Only {len(eligible)} players match the filters — "
-            f"need at least {constants.TEAM_SIZE} to form a team."
+            f"need at least {team_size} to form a team."
         )
         return
 
-    scores: dict[str, list[float]] = defaultdict(list)
-    for team in itertools.combinations(eligible, constants.TEAM_SIZE):
-        prediction = ai.infer(Game(date=None, duration=None, score=None, players=team))
-        for player in team:
-            scores[player.name].append(prediction)
+    team_count = math.comb(len(eligible), team_size)
+    if team_count > max_teams:
+        console.print(
+            f"[red]{len(eligible)} eligible players form "
+            f"{team_count:,} possible teams — refusing to evaluate more than "
+            f"{max_teams:,}.[/red]\n"
+            "Narrow the roster, e.g. 'task eval MIN_GAMES=3 YEAR=2025'."
+        )
+        return
+
+    # Map each eligible player to their feature-vector column once.
+    columns = numpy.array([ai.players.index(player) for player in eligible])
+
+    counts = numpy.zeros(len(eligible))
+    sums = numpy.zeros(len(eligible))
+    squares = numpy.zeros(len(eligible))
+
+    teams = itertools.combinations(range(len(eligible)), team_size)
+    batches = range(0, team_count, constants.EVAL_BATCH_SIZE)
+    for _ in tqdm.tqdm(batches, desc="Evaluating", disable=len(batches) < 4):
+        batch = numpy.array(
+            list(itertools.islice(teams, constants.EVAL_BATCH_SIZE))
+        )
+        features = numpy.zeros((len(batch), len(ai.players)), dtype=numpy.float32)
+        rows = numpy.repeat(numpy.arange(len(batch)), team_size)
+        features[rows, columns[batch.ravel()]] = 1.0
+
+        predictions = ai.infer_features(features)
+        member = batch.ravel()
+        per_member = numpy.repeat(predictions, team_size)
+        numpy.add.at(counts, member, 1)
+        numpy.add.at(sums, member, per_member)
+        numpy.add.at(squares, member, per_member**2)
+
+    means = sums / counts
+    # Sample standard deviation from running sums; 0 when only one sample.
+    variance = numpy.where(
+        counts > 1,
+        numpy.maximum(squares - counts * means**2, 0.0) / numpy.maximum(counts - 1, 1),
+        0.0,
+    )
+    deviations = numpy.sqrt(variance)
 
     title = "Player evaluation"
     if year is not None:
@@ -127,14 +172,12 @@ def evaluate_players(
     table.add_column("± Std", justify="right")
     table.add_column("Samples", justify="right")
 
-    ranking = sorted(scores.items(), key=lambda item: statistics.mean(item[1]), reverse=True)
-    for name, values in ranking:
-        deviation = statistics.stdev(values) if len(values) > 1 else 0.0
+    for index in numpy.argsort(-means):
         table.add_row(
-            name,
-            f"{statistics.mean(values):.2f}",
-            f"{deviation:.2f}",
-            str(len(values)),
+            eligible[index].name,
+            f"{means[index]:.2f}",
+            f"{deviations[index]:.2f}",
+            str(int(counts[index])),
         )
     console.print(table)
 
